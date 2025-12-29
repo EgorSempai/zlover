@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zloer | Connect. Play. Zloer</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" type="image/png" href="zlover-mascot.png">
+    <link rel="shortcut icon" type="image/png" href="zlover-mascot.png">
+    <link rel="apple-touch-icon" href="zlover-mascot.png">
+</head>
+<body class="theme-gaming">
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="loading-screen">
+        <div class="loading-content">
+            <div class="zlover-loading">
+                <img src="zlover-mascot.png" alt="Zlover" class="zlover-loading-image" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                <div class="zlover-loading-fallback" style="display: none;">🎮</div>
+            </div>
+            <div class="logo">Zloer</div>
+            <div class="loading-text">Zlover is setting up your connection...</div>
+            <div class="spinner"></div>
+            <div class="loading-tips">
+                <p>💡 Zlover's tip: Make sure your microphone is ready!</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Join Screen -->
+    <div id="join-screen" class="join-screen">
+        <div class="join-container glass">
+            <div class="logo-section">
+                <div class="mascot-container">
+                    <div class="zlover-mascot" id="zlover-mascot" title="Click me for gaming tips!">
+                        <img src="zlover-mascot.png" alt="Zlover" class="zlover-image" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                        <div class="zlover-fallback" style="display: none;">🎮</div>
+                    </div>
+                    <div class="mascot-speech-bubble">
+                        <p id="zlover-message">Hey there! I'm Zlover, your gaming buddy!</p>
+                    </div>
+                </div>
+                <h1>Zloer</h1>
+                <p class="slogan">Connect. Play. Zloer</p>
+                <p class="mascot-intro">Powered by Zlover - Making gaming connections awesome!</p>
+            </div>
+            
+            <div class="join-form">
+                <input type="text" id="nickname-input" placeholder="Enter your nickname" maxlength="20" required>
+                <input type="text" id="room-input" placeholder="Room ID (leave empty for new room)" maxlength="50">
+                <button id="join-btn" class="btn-primary">🚀 Join Room</button>
+                
+                <!-- Beta info and Telegram link -->
+                <div class="beta-info">
+                    <div class="version-badge">Beta 1.0</div>
+                    <div class="telegram-link">
+                        <a href="https://t.me/zloerru" target="_blank" rel="noopener noreferrer">
+                            📱 Join our Telegram
+                        </a>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="theme-selector">
+                <label>Theme:</label>
+                <select id="theme-select">
+                    <option value="theme-default">Default</option>
+                    <option value="theme-dark">Dark</option>
+                    <option value="theme-gaming" selected>Gaming</option>
+                    <option value="theme-neon">Neon</option>
+                </select>
+            </div>
+            
+            <div class="language-selector">
+                <label>Language:</label>
+                <select id="language-select">
+                    <option value="en">English</option>
+                    <option value="ru">Русский</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="app hidden">
+        <!-- Header -->
+        <header class="header glass">
+            <div class="header-left">
+                <div class="zlover-header">
+                    <span class="zlover-mini">
+                        <img src="zlover-mascot.png" alt="Zlover" class="zlover-mini-image" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';">
+                        <span class="zlover-mini-fallback" style="display: none;">🎮</span>
+                    </span>
+                    <h2>Zloer</h2>
+                    <span class="zlover-status">with Zlover</span>
+                </div>
+                <span id="room-id-display" class="room-id"></span>
+            </div>
+            
+            <div class="header-center">
+                <span id="user-count">0 users</span>
+                <button id="copy-room-btn" class="btn-icon" title="Copy Room ID">📋</button>
+            </div>
+            
+            <div class="header-right">
+                <button id="theme-btn" class="btn-icon" title="Change Theme">🎨</button>
+                <button id="settings-btn" class="btn-icon" title="Settings (Ctrl+E) | Right-click for Admin">⚙️</button>
+                <button id="leave-btn" class="btn-danger" title="Leave Room">🚪 Leave</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Video Grid -->
+            <div class="video-section">
+                <div id="video-grid" class="video-grid">
+                    <!-- Videos will be added dynamically -->
+                </div>
+                
+                <!-- Controls -->
+                <div class="controls glass">
+                    <button id="layout-grid-btn" class="btn-control active" title="Grid View (Ctrl+G)">⊞</button>
+                    <button id="layout-spotlight-btn" class="btn-control" title="Spotlight View (Ctrl+L)">⊡</button>
+                    <button id="visualizer-toggle-btn" class="btn-control active" title="Toggle Audio Visualizer (Ctrl+A)">📊</button>
+                    <button id="stats-toggle-btn" class="btn-control" title="Connection Stats (Ctrl+I)">📈</button>
+                    <button id="mute-btn" class="btn-control active" title="Mute/Unmute (Ctrl+M)">🎤</button>
+                    <button id="video-btn" class="btn-control inactive" title="Camera Off (Ctrl+V)">📷</button>
+                    <button id="screen-share-btn" class="btn-control" title="Share Screen (Ctrl+S)">🖥️</button>
+                    <button id="chat-toggle-btn" class="btn-control" title="Toggle Chat (Ctrl+C)">💬</button>
+                </div>
+            </div>
+
+            <!-- Chat Panel -->
+            <div id="chat-panel" class="chat-panel glass">
+                <div class="chat-header">
+                    <h3>💬 Chat</h3>
+                    <button id="chat-close-btn" class="btn-icon">✕</button>
+                </div>
+                
+                <div id="chat-messages" class="chat-messages">
+                    <!-- Messages will be added dynamically -->
+                </div>
+                
+                <div class="chat-input-container">
+                    <input type="text" id="chat-input" placeholder="Type a message..." maxlength="500">
+                    <button id="send-btn" class="btn-primary">Send</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Admin Panel (only visible to host) -->
+        <div id="admin-panel" class="admin-panel glass hidden">
+            <div class="admin-header">
+                <h3>👑 Host Controls</h3>
+                <button id="admin-close-btn" class="btn-icon">✕</button>
+            </div>
+            <div id="admin-users" class="admin-users">
+                <!-- User controls will be added dynamically -->
+            </div>
+        </div>
+
+        <!-- Settings Panel -->
+        <div id="settings-panel" class="settings-panel glass hidden">
+            <div class="settings-header">
+                <h3>⚙️ Settings</h3>
+                <button id="settings-close-btn" class="btn-icon">✕</button>
+            </div>
+            
+            <div class="settings-content">
+                <!-- Audio Settings -->
+                <div class="settings-section">
+                    <h4>🎵 Audio Settings</h4>
+                    
+                    <div class="setting-group">
+                        <label for="microphone-select">Microphone:</label>
+                        <select id="microphone-select" class="setting-select">
+                            <option value="">Loading...</option>
+                        </select>
+                        <button id="test-mic-btn" class="btn-small">Test</button>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="audio-codec-select">Audio Codec:</label>
+                        <select id="audio-codec-select" class="setting-select">
+                            <option value="opus">Opus (Recommended)</option>
+                            <option value="g722">G.722</option>
+                            <option value="pcmu">PCMU</option>
+                            <option value="pcma">PCMA</option>
+                        </select>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="audio-bitrate-select">Audio Bitrate:</label>
+                        <select id="audio-bitrate-select" class="setting-select">
+                            <option value="32000">32 kbps</option>
+                            <option value="64000">64 kbps</option>
+                            <option value="128000" selected>128 kbps (High Quality)</option>
+                            <option value="256000">256 kbps (Ultra High)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="audio-channels-select">Audio Channels:</label>
+                        <select id="audio-channels-select" class="setting-select">
+                            <option value="1">Mono</option>
+                            <option value="2" selected>Stereo</option>
+                        </select>
+                    </div>
+                    
+                    <div class="setting-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="echo-cancellation" checked>
+                            Echo Cancellation
+                        </label>
+                    </div>
+                    
+                    <div class="setting-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="noise-suppression" checked>
+                            Noise Suppression
+                        </label>
+                    </div>
+                    
+                    <div class="setting-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="auto-gain-control" checked>
+                            Auto Gain Control
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- Video Settings -->
+                <div class="settings-section">
+                    <h4>📹 Video Settings</h4>
+                    
+                    <div class="setting-group">
+                        <label for="camera-select">Camera:</label>
+                        <select id="camera-select" class="setting-select">
+                            <option value="">Loading...</option>
+                        </select>
+                        <button id="test-camera-btn" class="btn-small">Test</button>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="video-codec-select">Video Codec:</label>
+                        <select id="video-codec-select" class="setting-select">
+                            <option value="vp8">VP8</option>
+                            <option value="vp9">VP9 (Recommended)</option>
+                            <option value="h264">H.264</option>
+                            <option value="av1">AV1 (Experimental)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="video-resolution-select">Resolution:</label>
+                        <select id="video-resolution-select" class="setting-select">
+                            <option value="640x480">640x480 (VGA)</option>
+                            <option value="1280x720" selected>1280x720 (HD)</option>
+                            <option value="1920x1080">1920x1080 (Full HD)</option>
+                            <option value="2560x1440">2560x1440 (2K)</option>
+                            <option value="3840x2160">3840x2160 (4K)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="video-framerate-select">Frame Rate:</label>
+                        <select id="video-framerate-select" class="setting-select">
+                            <option value="15">15 FPS</option>
+                            <option value="24">24 FPS</option>
+                            <option value="30" selected>30 FPS</option>
+                            <option value="60">60 FPS</option>
+                        </select>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <label for="video-bitrate-select">Video Bitrate:</label>
+                        <select id="video-bitrate-select" class="setting-select">
+                            <option value="500000">500 kbps</option>
+                            <option value="1000000">1 Mbps</option>
+                            <option value="2000000" selected>2 Mbps</option>
+                            <option value="4000000">4 Mbps</option>
+                            <option value="8000000">8 Mbps</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Advanced Settings -->
+                <div class="settings-section">
+                    <h4>🔧 Advanced Settings</h4>
+                    
+                    <div class="setting-group">
+                        <label for="sample-rate-select">Sample Rate:</label>
+                        <select id="sample-rate-select" class="setting-select">
+                            <option value="16000">16 kHz</option>
+                            <option value="22050">22.05 kHz</option>
+                            <option value="44100">44.1 kHz</option>
+                            <option value="48000" selected>48 kHz (High Quality)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="setting-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="stereo-enabled" checked>
+                            Enable Stereo Audio
+                        </label>
+                    </div>
+                    
+                    <div class="setting-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="dtx-enabled">
+                            Discontinuous Transmission (DTX)
+                        </label>
+                    </div>
+                    
+                    <div class="setting-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="audio-visualizer-enabled" checked>
+                            Enable Audio Visualizer
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="settings-actions">
+                    <button id="apply-settings-btn" class="btn-primary">Apply Settings</button>
+                    <button id="reset-settings-btn" class="btn-secondary">Reset to Default</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connection Stats Overlay -->
+        <div id="connection-stats-overlay" class="connection-stats-overlay hidden">
+            <div class="stats-header">
+                <span>📈 Connection Stats</span>
+                <button id="stats-close-btn" class="stats-close-btn">✕</button>
+            </div>
+            <div id="stats-content" class="stats-content">
+                <div class="stats-section">
+                    <h4>Local Stream</h4>
+                    <div id="local-stats" class="stats-data">
+                        <div class="stat-item">
+                            <span class="stat-label">Video Resolution:</span>
+                            <span class="stat-value" id="local-resolution">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Frame Rate:</span>
+                            <span class="stat-value" id="local-framerate">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Video Bitrate:</span>
+                            <span class="stat-value" id="local-video-bitrate">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Audio Bitrate:</span>
+                            <span class="stat-value" id="local-audio-bitrate">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Video Codec:</span>
+                            <span class="stat-value" id="local-video-codec">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Audio Codec:</span>
+                            <span class="stat-value" id="local-audio-codec">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Server Ping:</span>
+                            <span class="stat-value" id="server-ping">-</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="remote-stats-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications -->
+    <div id="notifications" class="notifications"></div>
+
+    <!-- Scripts -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module" src="js/main.js"></script>
+    <script src="system-diagnostics.js"></script>
+    <script src="fix.js"></script>
+    <script src="patch.js"></script>
+</body>
+</html>

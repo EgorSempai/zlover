@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zloer Debug - Connection Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #1a1a2e; color: white; }
+        .debug-panel { background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; margin: 10px 0; }
+        .status { padding: 10px; margin: 5px 0; border-radius: 5px; }
+        .success { background: rgba(0,255,0,0.2); border: 1px solid #00ff00; }
+        .error { background: rgba(255,0,0,0.2); border: 1px solid #ff0000; }
+        .info { background: rgba(0,0,255,0.2); border: 1px solid #0000ff; }
+        button { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; }
+        .btn-primary { background: #ff6b35; color: white; }
+        .btn-success { background: #48bb78; color: white; }
+        input { padding: 10px; margin: 5px; border: 1px solid #ccc; border-radius: 5px; }
+        #logs { height: 300px; overflow-y: auto; background: #000; padding: 10px; border-radius: 5px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h1>🎮 Zloer Communication - Debug Mode</h1>
+    
+    <div class="debug-panel">
+        <h3>Connection Status</h3>
+        <div id="connection-status" class="status info">Not connected</div>
+        <button id="connect-btn" class="btn-primary">Connect to Server</button>
+    </div>
+
+    <div class="debug-panel">
+        <h3>Room Test</h3>
+        <input type="text" id="test-nickname" placeholder="Your nickname" value="TestUser">
+        <input type="text" id="test-room" placeholder="Room ID" value="TEST123">
+        <button id="join-room-btn" class="btn-success">Join Room</button>
+        <div id="room-status" class="status info">Not in room</div>
+    </div>
+
+    <div class="debug-panel">
+        <h3>Media Test</h3>
+        <button id="test-media-btn" class="btn-primary">Test Camera/Microphone</button>
+        <div id="media-status" class="status info">Media not tested</div>
+        <video id="test-video" autoplay muted playsinline style="width: 300px; height: 200px; background: #000; border-radius: 5px;"></video>
+    </div>
+
+    <div class="debug-panel">
+        <h3>Debug Logs</h3>
+        <button id="clear-logs-btn" class="btn-primary">Clear Logs</button>
+        <div id="logs"></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let socket = null;
+        let localStream = null;
+        
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.style.color = type === 'error' ? '#ff6666' : type === 'success' ? '#66ff66' : '#ffffff';
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            logs.appendChild(logEntry);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function updateStatus(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.textContent = message;
+            element.className = `status ${type}`;
+        }
+
+        // Connect to server
+        document.getElementById('connect-btn').addEventListener('click', () => {
+            try {
+                socket = io();
+                
+                socket.on('connect', () => {
+                    log('Connected to server successfully', 'success');
+                    updateStatus('connection-status', 'Connected to server', 'success');
+                });
+
+                socket.on('disconnect', () => {
+                    log('Disconnected from server', 'error');
+                    updateStatus('connection-status', 'Disconnected from server', 'error');
+                });
+
+                socket.on('existing-users', (data) => {
+                    log(`Received existing users: ${JSON.stringify(data)}`, 'success');
+                    updateStatus('room-status', `In room with ${data.users.length} other users`, 'success');
+                });
+
+                socket.on('user-joined', (data) => {
+                    log(`User joined: ${data.nickname} (${data.socketId})`, 'success');
+                });
+
+                socket.on('user-left', (data) => {
+                    log(`User left: ${data.socketId}`, 'info');
+                });
+
+                socket.on('signal', (data) => {
+                    log(`WebRTC signal received: ${data.signal.type} from ${data.from}`, 'info');
+                });
+
+            } catch (error) {
+                log(`Connection error: ${error.message}`, 'error');
+                updateStatus('connection-status', 'Connection failed', 'error');
+            }
+        });
+
+        // Join room
+        document.getElementById('join-room-btn').addEventListener('click', () => {
+            if (!socket) {
+                log('Please connect to server first', 'error');
+                return;
+            }
+
+            const nickname = document.getElementById('test-nickname').value;
+            const roomId = document.getElementById('test-room').value;
+
+            if (!nickname || !roomId) {
+                log('Please enter nickname and room ID', 'error');
+                return;
+            }
+
+            log(`Attempting to join room ${roomId} as ${nickname}`, 'info');
+            socket.emit('join-room', { roomId, nickname });
+        });
+
+        // Test media
+        document.getElementById('test-media-btn').addEventListener('click', async () => {
+            try {
+                log('Requesting camera and microphone access...', 'info');
+                
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                const video = document.getElementById('test-video');
+                video.srcObject = localStream;
+                
+                log('Media access granted successfully', 'success');
+                updateStatus('media-status', 'Camera and microphone working', 'success');
+
+            } catch (error) {
+                log(`Media access error: ${error.message}`, 'error');
+                updateStatus('media-status', `Media error: ${error.message}`, 'error');
+            }
+        });
+
+        // Clear logs
+        document.getElementById('clear-logs-btn').addEventListener('click', () => {
+            document.getElementById('logs').innerHTML = '';
+        });
+
+        log('Debug page loaded. Click "Connect to Server" to start testing.', 'info');
+    </script>
+</body>
+</html>

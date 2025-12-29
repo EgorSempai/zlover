@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  zloer-app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DOMAIN=your-domain.com
+    volumes:
+      - ./logs:/usr/src/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  coturn:
+    image: coturn/coturn:latest
+    network_mode: host
+    environment:
+      - TURN_USERNAME=zloer
+      - TURN_PASSWORD=zloer123
+    volumes:
+      - ./coturn.conf:/etc/coturn/turnserver.conf
+    restart: unless-stopped
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - zloer-app
+    restart: unless-stopped

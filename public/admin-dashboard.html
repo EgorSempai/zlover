@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zloer Communication - Admin Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .dashboard {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.8;
+            font-size: 1.1rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .card h3 {
+            margin-bottom: 15px;
+            color: #4fc3f7;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .metric:last-child {
+            border-bottom: none;
+        }
+
+        .metric-value {
+            font-weight: bold;
+            color: #81c784;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-good { background-color: #4caf50; }
+        .status-warning { background-color: #ff9800; }
+        .status-error { background-color: #f44336; }
+
+        .log-container {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+
+        .log-timestamp {
+            color: #90a4ae;
+            margin-right: 10px;
+        }
+
+        .log-level-info { color: #4fc3f7; }
+        .log-level-warn { color: #ff9800; }
+        .log-level-error { color: #f44336; }
+
+        .refresh-btn {
+            background: linear-gradient(45deg, #4fc3f7, #29b6f6);
+            border: none;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 10px 5px;
+            transition: transform 0.2s;
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .chart-container {
+            height: 200px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .room-list {
+            max-height: 250px;
+            overflow-y: auto;
+        }
+
+        .room-item {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-left: 4px solid #4fc3f7;
+        }
+
+        .room-id {
+            font-weight: bold;
+            color: #4fc3f7;
+        }
+
+        .room-users {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <h1>🎮 Zloer Communication Admin Dashboard</h1>
+            <p>Real-time monitoring and diagnostics</p>
+        </div>
+
+        <div style="text-align: center; margin-bottom: 20px;">
+            <button class="refresh-btn" onclick="refreshAll()">🔄 Refresh All</button>
+            <button class="refresh-btn" onclick="runDiagnostics()">🔍 Run Diagnostics</button>
+            <button class="refresh-btn" onclick="exportLogs()">📥 Export Logs</button>
+        </div>
+
+        <div class="grid">
+            <!-- Server Health -->
+            <div class="card">
+                <h3>🏥 Server Health</h3>
+                <div id="server-health">
+                    <div class="metric">
+                        <span>Status</span>
+                        <span class="metric-value" id="server-status">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span>Uptime</span>
+                        <span class="metric-value" id="server-uptime">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Memory Usage</span>
+                        <span class="metric-value" id="server-memory">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Active Rooms</span>
+                        <span class="metric-value" id="active-rooms">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Connected Users</span>
+                        <span class="metric-value" id="connected-users">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- WebRTC Stats -->
+            <div class="card">
+                <h3>📞 WebRTC Statistics</h3>
+                <div id="webrtc-stats">
+                    <div class="metric">
+                        <span>Active Connections</span>
+                        <span class="metric-value" id="webrtc-connections">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Average Bitrate</span>
+                        <span class="metric-value" id="avg-bitrate">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Average Packet Loss</span>
+                        <span class="metric-value" id="avg-packet-loss">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Average RTT</span>
+                        <span class="metric-value" id="avg-rtt">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Connection Quality</span>
+                        <span class="metric-value" id="connection-quality">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Resources -->
+            <div class="card">
+                <h3>⚡ System Resources</h3>
+                <div id="system-resources">
+                    <div class="metric">
+                        <span>Browser</span>
+                        <span class="metric-value" id="browser-info">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>WebRTC Support</span>
+                        <span class="metric-value" id="webrtc-support">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Media Devices</span>
+                        <span class="metric-value" id="media-devices">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Network Type</span>
+                        <span class="metric-value" id="network-type">-</span>
+                    </div>
+                    <div class="metric">
+                        <span>Memory Usage</span>
+                        <span class="metric-value" id="client-memory">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Rooms -->
+            <div class="card">
+                <h3>🏠 Active Rooms</h3>
+                <div class="room-list" id="room-list">
+                    <p>Loading rooms...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connection Logs -->
+        <div class="card">
+            <h3>📋 Connection Logs</h3>
+            <div class="log-container" id="connection-logs">
+                <div class="log-entry">
+                    <span class="log-timestamp">[Loading...]</span>
+                    <span>Initializing dashboard...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance Chart -->
+        <div class="card">
+            <h3>📊 Performance Metrics</h3>
+            <div class="chart-container" id="performance-chart">
+                <p>Performance chart will be displayed here</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let logs = [];
+        let performanceData = [];
+        let refreshInterval;
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', () => {
+            addLog('info', 'Dashboard initialized');
+            refreshAll();
+            
+            // Auto-refresh every 30 seconds
+            refreshInterval = setInterval(refreshAll, 30000);
+        });
+
+        // Add log entry
+        function addLog(level, message) {
+            const timestamp = new Date().toLocaleTimeString();
+            logs.unshift({ timestamp, level, message });
+            
+            // Keep only last 100 logs
+            if (logs.length > 100) {
+                logs = logs.slice(0, 100);
+            }
+            
+            updateLogDisplay();
+        }
+
+        // Update log display
+        function updateLogDisplay() {
+            const container = document.getElementById('connection-logs');
+            container.innerHTML = logs.map(log => 
+                `<div class="log-entry">
+                    <span class="log-timestamp">[${log.timestamp}]</span>
+                    <span class="log-level-${log.level}">${log.message}</span>
+                </div>`
+            ).join('');
+        }
+
+        // Refresh all data
+        async function refreshAll() {
+            addLog('info', 'Refreshing dashboard data...');
+            
+            try {
+                await Promise.all([
+                    refreshServerHealth(),
+                    refreshWebRTCStats(),
+                    refreshSystemResources(),
+                    refreshActiveRooms()
+                ]);
+                
+                addLog('info', 'Dashboard refresh completed');
+            } catch (error) {
+                addLog('error', `Refresh failed: ${error.message}`);
+            }
+        }
+
+        // Refresh server health
+        async function refreshServerHealth() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                document.getElementById('server-status').innerHTML = 
+                    `<span class="status-indicator status-good"></span>${data.status}`;
+                document.getElementById('server-uptime').textContent = data.uptime?.human || '-';
+                document.getElementById('server-memory').textContent = data.memory?.used || '-';
+                document.getElementById('active-rooms').textContent = data.rooms?.active || '-';
+                document.getElementById('connected-users').textContent = data.users?.total || '-';
+                
+                addLog('info', `Server health updated: ${data.status}`);
+            } catch (error) {
+                document.getElementById('server-status').innerHTML = 
+                    `<span class="status-indicator status-error"></span>Error`;
+                addLog('error', `Failed to fetch server health: ${error.message}`);
+            }
+        }
+
+        // Refresh WebRTC stats
+        function refreshWebRTCStats() {
+            if (window.rtcManager) {
+                const stats = window.rtcManager.getConnectionStats();
+                
+                document.getElementById('webrtc-connections').textContent = stats.peers || '0';
+                document.getElementById('avg-bitrate').textContent = 
+                    stats.averageStats?.avgBitrate ? `${Math.round(stats.averageStats.avgBitrate)} kbps` : '-';
+                document.getElementById('avg-packet-loss').textContent = 
+                    stats.averageStats?.avgPacketLoss ? `${stats.averageStats.avgPacketLoss.toFixed(1)}%` : '-';
+                document.getElementById('avg-rtt').textContent = 
+                    stats.averageStats?.avgRTT ? `${Math.round(stats.averageStats.avgRTT)}ms` : '-';
+                
+                // Connection quality indicator
+                const quality = window.socketManager?.connectionQuality || 'unknown';
+                const qualityColor = {
+                    excellent: 'status-good',
+                    good: 'status-good',
+                    fair: 'status-warning',
+                    poor: 'status-error',
+                    unknown: 'status-warning'
+                }[quality];
+                
+                document.getElementById('connection-quality').innerHTML = 
+                    `<span class="status-indicator ${qualityColor}"></span>${quality}`;
+                
+                addLog('info', `WebRTC stats updated: ${stats.peers} connections`);
+            } else {
+                addLog('warn', 'WebRTC manager not available');
+            }
+        }
+
+        // Refresh system resources
+        function refreshSystemResources() {
+            // Browser info
+            const browserInfo = navigator.userAgent.includes('Chrome') ? 'Chrome' :
+                               navigator.userAgent.includes('Firefox') ? 'Firefox' :
+                               navigator.userAgent.includes('Safari') ? 'Safari' : 'Other';
+            document.getElementById('browser-info').textContent = browserInfo;
+            
+            // WebRTC support
+            const webrtcSupported = !!window.RTCPeerConnection;
+            document.getElementById('webrtc-support').innerHTML = 
+                `<span class="status-indicator ${webrtcSupported ? 'status-good' : 'status-error'}"></span>${webrtcSupported ? 'Yes' : 'No'}`;
+            
+            // Media devices
+            if (navigator.mediaDevices) {
+                navigator.mediaDevices.enumerateDevices().then(devices => {
+                    const audioInputs = devices.filter(d => d.kind === 'audioinput').length;
+                    const videoInputs = devices.filter(d => d.kind === 'videoinput').length;
+                    document.getElementById('media-devices').textContent = `${audioInputs} audio, ${videoInputs} video`;
+                });
+            }
+            
+            // Network type
+            const connection = navigator.connection;
+            document.getElementById('network-type').textContent = 
+                connection ? connection.effectiveType || 'Unknown' : 'Unknown';
+            
+            // Client memory
+            if (performance.memory) {
+                const used = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+                document.getElementById('client-memory').textContent = `${used}MB`;
+            }
+            
+            addLog('info', 'System resources updated');
+        }
+
+        // Refresh active rooms (mock data for now)
+        function refreshActiveRooms() {
+            // This would typically fetch from /metrics endpoint
+            const mockRooms = [
+                { id: 'room123', users: 3, host: 'Alice', created: '2 minutes ago' },
+                { id: 'gaming-session', users: 5, host: 'Bob', created: '15 minutes ago' },
+                { id: 'team-meeting', users: 2, host: 'Charlie', created: '1 hour ago' }
+            ];
+            
+            const roomList = document.getElementById('room-list');
+            roomList.innerHTML = mockRooms.map(room => 
+                `<div class="room-item">
+                    <div class="room-id">${room.id}</div>
+                    <div class="room-users">${room.users} users • Host: ${room.host} • Created: ${room.created}</div>
+                </div>`
+            ).join('') || '<p>No active rooms</p>';
+            
+            addLog('info', `Active rooms updated: ${mockRooms.length} rooms`);
+        }
+
+        // Run diagnostics
+        async function runDiagnostics() {
+            addLog('info', 'Running comprehensive diagnostics...');
+            
+            if (window.ZloerDiagnostics) {
+                try {
+                    const results = await window.ZloerDiagnostics.runFullDiagnostic();
+                    addLog('info', `Diagnostics completed with health score: ${window.ZloerDiagnostics.calculateHealthScore(results)}/100`);
+                } catch (error) {
+                    addLog('error', `Diagnostics failed: ${error.message}`);
+                }
+            } else {
+                addLog('error', 'Diagnostics module not available');
+            }
+        }
+
+        // Export logs
+        function exportLogs() {
+            const logData = logs.map(log => `[${log.timestamp}] ${log.level.toUpperCase()}: ${log.message}`).join('\n');
+            const blob = new Blob([logData], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `zloer-logs-${new Date().toISOString().split('T')[0]}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            addLog('info', 'Logs exported successfully');
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        });
+    </script>
+</body>
+</html>
