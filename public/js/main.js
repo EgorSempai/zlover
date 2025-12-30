@@ -295,7 +295,7 @@ class RTCManager {
   // SIMPLIFIED: No complex WebRTC initialization needed
   async initializeMedia() {
     try {
-      console.log('🎤 Initializing media (SIMPLIFIED mode)...');
+      console.log('🎤 Initializing media with timeout protection...');
       
       // Load saved settings
       this.loadSettings();
@@ -303,7 +303,50 @@ class RTCManager {
       // Enumerate devices first
       await this.enumerateDevices();
       
-      // Request media with both audio and video
+      // Add timeout to prevent hanging
+      const mediaPromise = this.requestMediaWithFallback();
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Media access timeout')), 10000);
+      });
+      
+      this.localStream = await Promise.race([mediaPromise, timeoutPromise]);
+      
+      // Initialize audio visualizer
+      await this.initializeAudioVisualizer();
+      
+      // Add local video to UI
+      uiManager.addLocalVideo(this.localStream);
+      
+      // Set initial states properly
+      this.isVideoMuted = false;
+      this.isAudioMuted = false;
+      uiManager.updateVideoButton(this.isVideoMuted);
+      uiManager.updateMuteButton(this.isAudioMuted);
+      
+      console.log('✅ Media initialized successfully');
+      return true;
+      
+    } catch (error) {
+      console.error('Error accessing media devices:', error);
+      
+      // Create dummy stream as final fallback
+      console.log('🎤 Creating dummy stream for fallback...');
+      this.localStream = this.createDummyStream();
+      
+      uiManager.addLocalVideo(this.localStream);
+      this.isVideoMuted = true;
+      this.isAudioMuted = true;
+      uiManager.updateVideoButton(this.isVideoMuted);
+      uiManager.updateMuteButton(this.isAudioMuted);
+      NotificationManager.show('Using simplified mode without camera/microphone', 'warning');
+      console.log('✅ Media initialized with dummy stream');
+      return true;
+    }
+  }
+
+  async requestMediaWithFallback() {
+    // Try with both audio and video first
+    try {
       const constraints = {
         audio: {
           echoCancellation: true,
@@ -320,30 +363,14 @@ class RTCManager {
       };
       
       console.log('🎤 Requesting media with constraints:', constraints);
-      this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      // Initialize audio visualizer
-      await this.initializeAudioVisualizer();
-      
-      // Add local video to UI
-      uiManager.addLocalVideo(this.localStream);
-      
-      // Set initial states properly
-      this.isVideoMuted = false;
-      this.isAudioMuted = false;
-      uiManager.updateVideoButton(this.isVideoMuted);
-      uiManager.updateMuteButton(this.isAudioMuted);
-      
-      console.log('✅ Media initialized successfully (SIMPLIFIED mode)');
-      return true;
+      return await navigator.mediaDevices.getUserMedia(constraints);
       
     } catch (error) {
-      console.error('Error accessing media devices:', error);
+      console.log('🎤 Fallback: Trying audio only...');
       
-      // Try with audio only as fallback
+      // Try audio only
       try {
-        console.log('🎤 Fallback: Trying audio only...');
-        this.localStream = await navigator.mediaDevices.getUserMedia({
+        return await navigator.mediaDevices.getUserMedia({
           video: false,
           audio: {
             echoCancellation: true,
@@ -351,21 +378,88 @@ class RTCManager {
             autoGainControl: true
           }
         });
-        
-        await this.initializeAudioVisualizer();
-        uiManager.addLocalVideo(this.localStream);
-        this.isVideoMuted = true;
-        this.isAudioMuted = false;
-        uiManager.updateVideoButton(this.isVideoMuted);
-        uiManager.updateMuteButton(this.isAudioMuted);
-        NotificationManager.show('Camera not available, using audio only', 'warning');
-        console.log('✅ Media initialized with audio only');
-        return true;
-      } catch (basicError) {
-        console.error('Error accessing audio:', basicError);
-        NotificationManager.show('No microphone access. Please check permissions.', 'error');
-        return false;
+      } catch (audioError) {
+        console.log('🎤 No media access, will use dummy stream');
+        throw audioError;
       }
+    }
+  }
+
+  createDummyStream() {
+    // Create a canvas with a simple placeholder
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    
+    // Draw placeholder
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.font = '24px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('NO CAMERA ACCESS', canvas.width/2, canvas.height/2 - 20);
+    ctx.font = '16px Arial';
+    ctx.fillStyle = '#888';
+    ctx.fillText('Check permissions', canvas.width/2, canvas.height/2 + 20);
+    
+    return canvas.captureStream(1); // 1 FPS
+  }
+
+  async enumerateDevices() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      
+      this.availableDevices.audioInputs = devices.filter(device => device.kind === 'audioinput');
+      this.availableDevices.videoInputs = devices.filter(device => device.kind === 'videoinput');
+      
+      console.log('Available devices:', this.availableDevices);
+      return this.availableDevices;
+    } catch (error) {
+      console.error('Error enumerating devices:', error);
+      return { audioInputs: [], videoInputs: [] };
+    }
+  }
+
+  loadSettings() {
+    try {
+      const savedSettings = localStorage.getItem('zloer-settings');
+      if (savedSettings) {
+        this.currentSettings = { ...this.currentSettings, ...JSON.parse(savedSettings) };
+        console.log('Settings loaded:', this.currentSettings);
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error);
+    }
+  }
+
+  async initializeAudioVisualizer() {
+    try {
+      // Create audio context and analyser
+      this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // Resume audio context if it's suspended (required by some browsers)
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+      }
+      
+      this.analyser = this.audioContext.createAnalyser();
+      
+      // Configure analyser for smooth visualization
+      this.analyser.fftSize = 256;
+      this.analyser.smoothingTimeConstant = 0.8;
+      
+      // Connect audio stream to analyser
+      const audioTracks = this.localStream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        const source = this.audioContext.createMediaStreamSource(this.localStream);
+        source.connect(this.analyser);
+        
+        console.log('✅ Audio visualizer initialized');
+      }
+    } catch (error) {
+      console.error('Error initializing audio visualizer:', error);
+      // Continue without visualizer if it fails
     }
   }
 
@@ -1750,11 +1844,47 @@ class UIManager {
         }
       }
     });
+
+    // Skip loading button
+    const skipLoadingBtn = document.getElementById('skip-loading-btn');
+    if (skipLoadingBtn) {
+      skipLoadingBtn.addEventListener('click', () => {
+        console.log('User clicked skip loading');
+        this.skipLoading();
+      });
+    }
+  }
+
+  skipLoading() {
+    console.log('Skipping loading process...');
+    
+    // Create dummy stream
+    rtcManager.localStream = rtcManager.createDummyStream();
+    rtcManager.isVideoMuted = true;
+    rtcManager.isAudioMuted = true;
+    
+    // Connect to server
+    socketManager.connect();
+    
+    // Show main app immediately
+    setTimeout(() => {
+      this.showMainApp();
+      NotificationManager.show('Skipped media setup - using simplified mode only', 'info');
+    }, 500);
   }
 
   async handleJoin() {
-    const nickname = document.getElementById('nickname-input').value.trim();
-    const roomId = document.getElementById('room-input').value.trim() || this.generateRoomId();
+    const nicknameInput = document.getElementById('nickname-input');
+    const roomInput = document.getElementById('room-input');
+    
+    if (!nicknameInput || !roomInput) {
+      console.error('❌ Required input elements not found');
+      NotificationManager.show('Page not loaded correctly. Please refresh.', 'error');
+      return;
+    }
+    
+    const nickname = nicknameInput.value.trim();
+    const roomId = roomInput.value.trim() || this.generateRoomId();
 
     if (!nickname) {
       NotificationManager.show('Please enter a nickname', 'error');
@@ -1770,45 +1900,76 @@ class UIManager {
     window.history.replaceState({}, '', roomUrl);
 
     // Show loading
-    document.getElementById('loading-screen').style.display = 'flex';
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen) {
+      loadingScreen.style.display = 'flex';
+    }
 
     try {
-      // Initialize media
-      console.log('Initializing media...');
-      const mediaInitialized = await rtcManager.initializeMedia();
-      if (!mediaInitialized) {
-        console.error('Media initialization failed');
-        document.getElementById('loading-screen').style.display = 'none';
-        return;
-      }
-      console.log('Media initialized successfully');
-
-      // Connect to server
-      console.log('Connecting to server...');
-      socketManager.connect();
+      // Add overall timeout for the entire process
+      const joinProcess = this.performJoinProcess();
+      const timeoutProcess = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Join process timeout')), 15000);
+      });
       
-      // Wait a bit for connection to establish
-      setTimeout(() => {
-        console.log('Joining room...', { roomId, nickname });
-        socketManager.emit('join-room', { roomId, nickname });
-      }, 1000);
-
-      // Hide join screen and show app
-      setTimeout(() => {
-        console.log('Showing main app...');
-        document.getElementById('loading-screen').style.display = 'none';
-        document.getElementById('join-screen').style.display = 'none';
-        document.getElementById('app').classList.remove('hidden');
-        
-        // Update UI
-        document.getElementById('room-id-display').textContent = `Room: ${roomId}`;
-      }, 2000);
-
+      await Promise.race([joinProcess, timeoutProcess]);
+      
     } catch (error) {
       console.error('Error during join process:', error);
-      NotificationManager.show(`Join failed: ${error.message}`, 'error');
-      document.getElementById('loading-screen').style.display = 'none';
+      if (loadingScreen) loadingScreen.style.display = 'none';
+      
+      if (error.message === 'Join process timeout') {
+        NotificationManager.show('Connection timeout. Continuing anyway...', 'warning');
+        // Continue anyway
+        this.showMainApp();
+      } else {
+        NotificationManager.show(`Join failed: ${error.message}`, 'error');
+      }
     }
+  }
+
+  async performJoinProcess() {
+    // Initialize media
+    console.log('Initializing media...');
+    const mediaInitialized = await rtcManager.initializeMedia();
+    if (!mediaInitialized) {
+      console.error('Media initialization failed');
+      throw new Error('Media initialization failed');
+    }
+    console.log('Media initialized successfully');
+
+    // Connect to server
+    console.log('Connecting to server...');
+    socketManager.connect();
+    
+    // Wait for connection and join room
+    setTimeout(() => {
+      console.log('Joining room...', { roomId: this.roomId, nickname: this.nickname });
+      socketManager.emit('join-room', { roomId: this.roomId, nickname: this.nickname });
+    }, 1000);
+
+    // Show main app after a delay
+    setTimeout(() => {
+      this.showMainApp();
+    }, 3000);
+  }
+
+  showMainApp() {
+    console.log('Showing main app...');
+    const loadingScreen = document.getElementById('loading-screen');
+    const joinScreen = document.getElementById('join-screen');
+    const app = document.getElementById('app');
+    const roomDisplay = document.getElementById('room-id-display');
+    
+    if (loadingScreen) loadingScreen.style.display = 'none';
+    if (joinScreen) joinScreen.style.display = 'none';
+    if (app) app.classList.remove('hidden');
+    if (roomDisplay) roomDisplay.textContent = `Room: ${this.roomId}`;
+    
+    // Show notification
+    setTimeout(() => {
+      NotificationManager.show('🎮 Welcome to Zloer! Chat and see user presence.', 'success', 5000);
+    }, 1000);
   }
 
   generateRoomId() {
