@@ -344,8 +344,13 @@ io.on('connection', (socket) => {
       // Join socket room
       socket.join(roomId);
       
-      // Get existing users in room (excluding current user)
-      const existingUsers = Array.from(room.users).filter(id => id !== socket.id);
+      // Get existing users in room (excluding current user) with their nicknames
+      const existingUsers = Array.from(room.users)
+        .filter(id => id !== socket.id)
+        .map(id => ({
+          socketId: id,
+          nickname: userMap.get(id)?.nickname || 'User'
+        }));
       
       console.log(`Existing users in room ${roomId}:`, existingUsers);
       
