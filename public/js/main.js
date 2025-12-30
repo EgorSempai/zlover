@@ -1499,6 +1499,13 @@ class RTCManager {
             await sender.setParameters(params);
             
             console.log(`✅ Added video track to peer connection ${socketId}`);
+            
+            // IMPORTANT: Renegotiate the connection so other users can see the video
+            // Add small delay to ensure track is properly added
+            setTimeout(async () => {
+              await this.renegotiateConnection(socketId, pc);
+            }, 100);
+            
           } catch (error) {
             console.error(`❌ Error adding video track to ${socketId}:`, error);
           }
@@ -1507,7 +1514,7 @@ class RTCManager {
         this.isVideoMuted = false;
         uiManager.updateVideoButton(this.isVideoMuted);
         uiManager.updateLocalVideoDisplay(false);
-        NotificationManager.show(`🎮 ${uiManager.t('cameraEnabled')}`, 'success');
+        NotificationManager.show(`📹 Camera enabled - updating connections...`, 'success');
         return true;
         
       } catch (error) {
@@ -1521,7 +1528,121 @@ class RTCManager {
       this.isVideoMuted = !videoTrack.enabled;
       uiManager.updateVideoButton(this.isVideoMuted);
       uiManager.updateLocalVideoDisplay(this.isVideoMuted);
+      
+      // IMPORTANT: Renegotiate connections when video state changes
+      if (this.peers.size > 0) {
+        console.log('🔄 Renegotiating connections due to video toggle');
+        this.peers.forEach(async (pc, socketId) => {
+          try {
+            await this.renegotiateConnection(socketId, pc);
+          } catch (error) {
+            console.error(`❌ Error renegotiating after video toggle with ${socketId}:`, error);
+          }
+        });
+      }
+      
       return !this.isVideoMuted;
+    }
+  }
+
+  // Renegotiate WebRTC connection when tracks are added/removed
+  async renegotiateConnection(socketId, pc) {
+    try {
+      console.log(`🔄 Renegotiating connection with ${socketId} for new video track`);
+      
+      // Create a new offer with the updated tracks
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
+      });
+      
+      // Apply codec enhancements
+      offer.sdp = this.enhanceAudioSDP(offer.sdp);
+      offer.sdp = this.enhanceVideoSDP(offer.sdp);
+      
+      await pc.setLocalDescription(offer);
+      
+      // Send the renegotiation offer
+      socketManager.emit('signal', {
+        to: socketId,
+        signal: {
+          type: 'renegotiate-offer',
+          offer: offer
+        }
+      });
+      
+      console.log(`📤 Sent renegotiation offer to ${socketId}`);
+      
+      // Show user feedback
+      NotificationManager.show(`🔄 Updating video connection with other users...`, 'info', 2000);
+      
+    } catch (error) {
+      console.error(`❌ Error renegotiating connection with ${socketId}:`, error);
+    }
+  }
+
+  // Handle renegotiation offers from remote peers
+  async handleRenegotiateOffer(socketId, offer) {
+    console.log(`📥 Handling renegotiation offer from ${socketId}`);
+    const pc = this.peers.get(socketId);
+    
+    if (!pc) {
+      console.error(`❌ No peer connection found for ${socketId}`);
+      return;
+    }
+    
+    try {
+      // Apply codec enhancements to incoming offer
+      offer.sdp = this.enhanceAudioSDP(offer.sdp);
+      offer.sdp = this.enhanceVideoSDP(offer.sdp);
+      
+      await pc.setRemoteDescription(offer);
+      
+      const answer = await pc.createAnswer();
+      
+      // Apply codec enhancements to answer
+      answer.sdp = this.enhanceAudioSDP(answer.sdp);
+      answer.sdp = this.enhanceVideoSDP(answer.sdp);
+      
+      await pc.setLocalDescription(answer);
+      
+      // Send the renegotiation answer
+      socketManager.emit('signal', {
+        to: socketId,
+        signal: {
+          type: 'renegotiate-answer',
+          answer: answer
+        }
+      });
+      
+      console.log(`📤 Sent renegotiation answer to ${socketId}`);
+      
+    } catch (error) {
+      console.error(`❌ Error handling renegotiation offer from ${socketId}:`, error);
+    }
+  }
+
+  // Handle renegotiation answers from remote peers
+  async handleRenegotiateAnswer(socketId, answer) {
+    console.log(`📥 Handling renegotiation answer from ${socketId}`);
+    const pc = this.peers.get(socketId);
+    
+    if (!pc) {
+      console.error(`❌ No peer connection found for ${socketId}`);
+      return;
+    }
+    
+    try {
+      // Apply codec enhancements to incoming answer
+      answer.sdp = this.enhanceAudioSDP(answer.sdp);
+      answer.sdp = this.enhanceVideoSDP(answer.sdp);
+      
+      await pc.setRemoteDescription(answer);
+      
+      console.log(`✅ Renegotiation completed with ${socketId}`);
+      
+    } catch (error) {
+      console.error(`❌ Error handling renegotiation answer from ${socketId}:`, error);
     }
   }
 
@@ -3550,6 +3671,14 @@ socketManager.connect = function() {
         case 'ice-candidate':
           await rtcManager.handleIceCandidate(from, signal.candidate);
           break;
+        case 'renegotiate-offer':
+          await rtcManager.handleRenegotiateOffer(from, signal.offer);
+          break;
+        case 'renegotiate-answer':
+          await rtcManager.handleRenegotiateAnswer(from, signal.answer);
+          break;
+        default:
+          console.warn(`Unknown signal type: ${signal.type}`);
       }
     } catch (error) {
       console.error('❌ Error handling signal:', error);
