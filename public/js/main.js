@@ -472,18 +472,18 @@ class RTCManager {
           const stats = await peer.getStats();
           stats.forEach(report => {
             if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-              const localType = report.localCandidate?.candidateType;
-              const remoteType = report.remoteCandidate?.candidateType;
+              const localType = report.localCandidate ? report.localCandidate.candidateType : 'unknown';
+              const remoteType = report.remoteCandidate ? report.remoteCandidate.candidateType : 'unknown';
               
               if (localType === 'relay' || remoteType === 'relay') {
-                console.log(`✅ TURN relay active for ${socketId}: ${localType} -> ${remoteType}`);
+                console.log(`✅ Using TURN Relay for ${socketId} (Secure Connection)`);
               } else {
-                console.warn(`⚠️ Not using TURN for ${socketId}: ${localType} -> ${remoteType}`);
+                console.log(`⚡ Direct Connection (P2P) for ${socketId} - Best Performance`);
               }
             }
           });
         } catch (error) {
-          console.error('Error verifying TURN usage:', error);
+          // Ignore stats errors
         }
       }
     }
@@ -2062,13 +2062,13 @@ class UIManager {
     
     // Add global event listener for video control buttons
     document.addEventListener('click', (e) => {
+      const socketId = e.target.closest('.video-container')?.dataset.socketId;
+      
       if (e.target.classList.contains('fullscreen-btn')) {
         e.stopPropagation();
-        const socketId = e.target.closest('.video-container').dataset.socketId;
         this.toggleFullscreen(socketId);
       } else if (e.target.classList.contains('pin-btn')) {
         e.stopPropagation();
-        const socketId = e.target.closest('.video-container').dataset.socketId;
         this.togglePin(socketId);
       }
     });
@@ -2402,7 +2402,15 @@ class UIManager {
   }
 
   addLocalVideo(stream) {
+    console.log('🎥 Adding local video');
+    // FIXED: Define socketId explicitly for local user
+    const socketId = 'local';
+    
     const videoGrid = document.getElementById('video-grid');
+    
+    // Remove existing container if present
+    const existingContainer = document.getElementById('local-container');
+    if (existingContainer) existingContainer.remove();
     
     const videoContainer = document.createElement('div');
     videoContainer.className = 'video-container';
@@ -2413,8 +2421,9 @@ class UIManager {
     video.id = 'local-video';
     video.srcObject = stream;
     video.autoplay = true;
-    video.playsinline = true;
-    video.muted = true; // Local video should be muted
+    video.playsInline = true;
+    video.muted = true; // IMPORTANT: Mute local video to prevent echo/feedback!
+    video.volume = 0;
     
     // Add double-click for fullscreen
     video.addEventListener('dblclick', () => {
@@ -2431,19 +2440,43 @@ class UIManager {
     
     const overlay = document.createElement('div');
     overlay.className = 'video-overlay';
-    overlay.innerHTML = `
-      <span class="user-name">${this.nickname} (You)</span>
-      <div class="video-controls">
-        <span class="host-badge" style="display: ${this.isHost ? 'inline' : 'none'}" title="${this.t('hostBadge')}">👑</span>
-        <button class="pin-btn" onclick="uiManager.togglePin('local')" title="Pin/Unpin">📌</button>
-        <button class="fullscreen-btn" onclick="uiManager.toggleFullscreen('local')" title="Fullscreen">⛶</button>
-      </div>
-    `;
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'user-name';
+    nameSpan.textContent = `${this.nickname} (You)`;
+    
+    const controlsDiv = document.createElement('div');
+    controlsDiv.className = 'video-controls'; 
+    
+    const hostBadge = document.createElement('span');
+    hostBadge.className = 'host-badge';
+    hostBadge.textContent = '👑';
+    hostBadge.style.display = this.isHost ? 'inline' : 'none';
+    hostBadge.title = 'Owner';
+    
+    const pinBtn = document.createElement('button');
+    pinBtn.className = 'pin-btn';
+    pinBtn.innerHTML = '📌';
+    pinBtn.onclick = () => this.togglePin('local');
+    
+    const fsBtn = document.createElement('button');
+    fsBtn.className = 'fullscreen-btn';
+    fsBtn.innerHTML = '⛶';
+    fsBtn.onclick = () => this.toggleFullscreen('local'); 
+    
+    controlsDiv.appendChild(hostBadge);
+    controlsDiv.appendChild(pinBtn);
+    controlsDiv.appendChild(fsBtn);
+    
+    overlay.appendChild(nameSpan);
+    overlay.appendChild(controlsDiv);
     
     videoContainer.appendChild(video);
     videoContainer.appendChild(visualizerCanvas);
     videoContainer.appendChild(overlay);
-    videoGrid.appendChild(videoContainer);
+    
+    // Prepend to show local video first
+    videoGrid.prepend(videoContainer);
     
     this.updateLayout();
   }
@@ -2460,9 +2493,34 @@ class UIManager {
     videoContainer.dataset.socketId = socketId;
     
     const video = document.createElement('video');
+    video.id = `remote-video-${socketId}`;
     video.srcObject = stream;
     video.autoplay = true;
     video.playsinline = true;
+    video.muted = false; // Audio must be ON
+    video.volume = 1.0;
+
+    // --- AUTOPLAY FIX ---
+    const tryPlay = async () => {
+      try {
+        await video.play();
+        console.log(`✅ Video playing for ${socketId}`);
+      } catch (err) {
+        console.warn(`⚠️ Autoplay blocked for ${socketId}. Waiting for user interaction.`);
+        const enableAudio = async () => {
+          try {
+            await video.play();
+            document.removeEventListener('click', enableAudio);
+            document.removeEventListener('touchstart', enableAudio);
+          } catch(e) {}
+        };
+        document.addEventListener('click', enableAudio);
+        document.addEventListener('touchstart', enableAudio);
+      }
+    };
+
+    video.onloadedmetadata = tryPlay;
+    // -------------------
     
     // Add double-click for fullscreen
     video.addEventListener('dblclick', () => {
@@ -2753,8 +2811,17 @@ class UIManager {
 
   updateUserName(socketId, nickname) {
     const nameElement = document.getElementById(`name-${socketId}`);
+    
     if (nameElement) {
       nameElement.textContent = nickname;
+      console.log(`✅ Name updated for ${socketId}: ${nickname}`);
+    } else {
+      // Retry if element is not yet created
+      console.log(`⏳ Waiting for video element for ${socketId}...`);
+      setTimeout(() => {
+        const retryElement = document.getElementById(`name-${socketId}`);
+        if (retryElement) retryElement.textContent = nickname;
+      }, 500);
     }
   }
 
