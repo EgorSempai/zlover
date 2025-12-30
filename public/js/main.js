@@ -944,6 +944,60 @@ class RTCManager {
     console.log('🐛 === END CAMERA DEBUG ===');
   }
 
+  // Nuclear option: Force refresh all video tracks
+  async forceRefreshVideoTracks() {
+    console.log('🔄 === FORCE REFRESHING ALL VIDEO TRACKS ===');
+    
+    if (!this.localStream) {
+      console.error('❌ No local stream available');
+      return;
+    }
+    
+    const videoTrack = this.localStream.getVideoTracks()[0];
+    if (!videoTrack) {
+      console.log('ℹ️ No video track to refresh');
+      return;
+    }
+    
+    console.log('🔄 Force refreshing video track for all peers...');
+    
+    for (const [socketId, pc] of this.peers.entries()) {
+      try {
+        console.log(`🔄 Force refreshing video for ${socketId}`);
+        
+        // Find ALL transceivers and log them
+        const transceivers = pc.getTransceivers();
+        console.log(`📡 Transceivers for ${socketId}:`, transceivers.map(t => ({
+          mid: t.mid,
+          direction: t.direction,
+          senderTrack: t.sender.track?.kind,
+          receiverTrack: t.receiver.track?.kind
+        })));
+        
+        // Find video transceiver
+        const videoTransceiver = transceivers.find(t => 
+          t.receiver.track?.kind === 'video' || 
+          t.sender.track?.kind === 'video' ||
+          (t.sender.track === null && t.receiver.track === null)
+        );
+        
+        if (videoTransceiver) {
+          console.log(`📹 Found video transceiver for ${socketId}, replacing track...`);
+          await videoTransceiver.sender.replaceTrack(videoTrack.enabled ? videoTrack : null);
+          console.log(`✅ Force refreshed video track for ${socketId}`);
+        } else {
+          console.error(`❌ No video transceiver found for ${socketId}`);
+        }
+        
+      } catch (error) {
+        console.error(`❌ Error force refreshing video for ${socketId}:`, error);
+      }
+    }
+    
+    console.log('🔄 === FORCE REFRESH COMPLETE ===');
+    NotificationManager.show('Force refreshed all video tracks', 'info');
+  }
+
   createPeerConnection(socketId) {
     const config = this.getRTCConfiguration();
     const pc = new RTCPeerConnection(config);
@@ -953,50 +1007,68 @@ class RTCManager {
     // FIXED: Initialize pending candidates queue for this peer
     this.pendingCandidates.set(socketId, []);
     
-    // Add local stream tracks with ENHANCED settings for high-quality audio
+    // CRITICAL FIX: Always add transceivers BEFORE adding tracks
+    // This ensures proper transceiver setup for camera visibility
+    console.log(`📹 Setting up transceivers for ${socketId}`);
+    
+    // Add audio transceiver
+    const audioTransceiver = pc.addTransceiver('audio', {
+      direction: 'sendrecv'
+    });
+    console.log(`🎵 Added audio transceiver for ${socketId}:`, audioTransceiver.mid);
+    
+    // Add video transceiver - ALWAYS, even without video track
+    const videoTransceiver = pc.addTransceiver('video', {
+      direction: 'sendrecv'
+    });
+    console.log(`📹 Added video transceiver for ${socketId}:`, videoTransceiver.mid);
+    
+    // Now add local stream tracks to the existing transceivers
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => {
-        const sender = pc.addTrack(track, this.localStream);
+        console.log(`🔄 Adding ${track.kind} track to ${socketId}`);
         
-        // ENHANCED: Configure audio encoding parameters for maximum quality
-        if (track.kind === 'audio') {
-          const params = sender.getParameters();
-          if (params.encodings && params.encodings.length > 0) {
-            // Use the enhanced bitrate from settings
-            params.encodings[0].maxBitrate = this.currentSettings.audioBitrate;
-            params.encodings[0].priority = 'high'; // High priority for audio
-            params.encodings[0].networkPriority = 'high';
-          }
-          sender.setParameters(params).catch(console.error);
-        }
+        // Find the appropriate transceiver for this track
+        const transceiver = pc.getTransceivers().find(t => 
+          t.receiver.track === null && 
+          t.sender.track === null && 
+          ((track.kind === 'audio' && t === audioTransceiver) || 
+           (track.kind === 'video' && t === videoTransceiver))
+        );
         
-        // ENHANCED: Configure video encoding parameters
-        if (track.kind === 'video') {
-          const params = sender.getParameters();
-          if (params.encodings && params.encodings.length > 0) {
-            params.encodings[0].maxBitrate = this.currentSettings.videoBitrate;
-            params.encodings[0].maxFramerate = this.currentSettings.videoFramerate;
-            params.encodings[0].priority = 'medium';
-            params.encodings[0].networkPriority = 'medium';
-          }
-          sender.setParameters(params).catch(console.error);
+        if (transceiver) {
+          // Replace the null track with our actual track
+          transceiver.sender.replaceTrack(track).then(() => {
+            console.log(`✅ Added ${track.kind} track to transceiver for ${socketId}`);
+            
+            // Configure encoding parameters
+            if (track.kind === 'audio') {
+              const params = transceiver.sender.getParameters();
+              if (params.encodings && params.encodings.length > 0) {
+                params.encodings[0].maxBitrate = this.currentSettings.audioBitrate;
+                params.encodings[0].priority = 'high';
+                params.encodings[0].networkPriority = 'high';
+              }
+              transceiver.sender.setParameters(params).catch(console.error);
+            } else if (track.kind === 'video') {
+              const params = transceiver.sender.getParameters();
+              if (params.encodings && params.encodings.length > 0) {
+                params.encodings[0].maxBitrate = this.currentSettings.videoBitrate;
+                params.encodings[0].maxFramerate = this.currentSettings.videoFramerate;
+                params.encodings[0].priority = 'medium';
+                params.encodings[0].networkPriority = 'medium';
+              }
+              transceiver.sender.setParameters(params).catch(console.error);
+            }
+          }).catch(error => {
+            console.error(`❌ Error adding ${track.kind} track to ${socketId}:`, error);
+          });
+        } else {
+          console.error(`❌ No available transceiver for ${track.kind} track for ${socketId}`);
         }
       });
-    }
-    
-    // IMPORTANT: Always add a video transceiver, even if we don't have video yet
-    // This ensures we can add video later without renegotiation
-    const hasVideoTrack = this.localStream && this.localStream.getVideoTracks().length > 0;
-    if (!hasVideoTrack) {
-      // Add a video transceiver for future video track
-      // Use sendrecv from the start to avoid direction changes that cause renegotiation
-      const videoTransceiver = pc.addTransceiver('video', {
-        direction: 'sendrecv'
-      });
-      console.log(`📹 Added video transceiver (sendrecv) for future video track to ${socketId}`);
-      console.log(`📹 Transceiver details: direction=${videoTransceiver.direction}, mid=${videoTransceiver.mid}`);
     } else {
-      console.log(`📹 Video track already exists for ${socketId}, not adding transceiver`);
+      console.log(`ℹ️ No local stream available when creating peer connection for ${socketId}`);
     }
 
     // Handle incoming tracks
@@ -1707,57 +1779,32 @@ class RTCManager {
           try {
             console.log(`🔄 Updating video track for peer ${socketId}`);
             
-            // Find the video sender - look for video transceiver first
-            let videoSender = null;
-            const transceivers = pc.getTransceivers();
-            
-            // First, try to find video transceiver
-            const videoTransceiver = transceivers.find(t => 
-              t.receiver.track && t.receiver.track.kind === 'video' || 
-              t.sender.track && t.sender.track.kind === 'video' ||
-              (t.mid !== null && t.receiver.track === null && t.sender.track === null) // Empty video transceiver
+            // SIMPLIFIED: Find video transceiver directly by kind
+            const videoTransceiver = pc.getTransceivers().find(t => 
+              t.receiver.track?.kind === 'video' || 
+              (t.sender.track === null && t.receiver.track === null && t.mid !== null)
             );
             
-            if (videoTransceiver) {
-              videoSender = videoTransceiver.sender;
-              console.log(`📹 Found video transceiver for ${socketId}:`, {
-                hasTrack: !!videoSender.track,
-                direction: videoTransceiver.direction,
-                mid: videoTransceiver.mid
-              });
-            } else {
-              // Fallback: look through all senders
-              videoSender = pc.getSenders().find(sender => 
-                sender.track === null || sender.track.kind === 'video'
-              );
-              console.log(`📹 Fallback video sender search for ${socketId}:`, !!videoSender);
-            }
-            
-            if (videoSender) {
-              // Replace the track (or set it if it was null)
-              await videoSender.replaceTrack(newVideoTrack);
+            if (videoTransceiver && videoTransceiver.sender) {
+              // Replace the track
+              await videoTransceiver.sender.replaceTrack(newVideoTrack);
               
               // Configure video encoding parameters
-              const params = videoSender.getParameters();
+              const params = videoTransceiver.sender.getParameters();
               if (params.encodings && params.encodings.length > 0) {
                 params.encodings[0].maxBitrate = this.currentSettings.videoBitrate;
                 params.encodings[0].maxFramerate = this.currentSettings.videoFramerate;
                 params.encodings[0].priority = 'medium';
                 params.encodings[0].networkPriority = 'medium';
               }
-              await videoSender.setParameters(params);
+              await videoTransceiver.sender.setParameters(params);
               
-              console.log(`✅ Successfully replaced video track for peer connection ${socketId}`);
+              console.log(`✅ Successfully replaced video track for peer ${socketId}`);
             } else {
-              console.error(`❌ No video sender found for ${socketId}! This is the camera visibility bug.`);
-              console.log(`🔍 Available senders for ${socketId}:`, pc.getSenders().map(s => ({
-                hasTrack: !!s.track,
-                trackKind: s.track?.kind,
-                trackId: s.track?.id
-              })));
-              console.log(`🔍 Available transceivers for ${socketId}:`, transceivers.map(t => ({
-                direction: t.direction,
+              console.error(`❌ No video transceiver found for ${socketId}!`);
+              console.log(`� Avalilable transceivers:`, pc.getTransceivers().map(t => ({
                 mid: t.mid,
+                direction: t.direction,
                 senderTrack: t.sender.track?.kind,
                 receiverTrack: t.receiver.track?.kind
               })));
@@ -1797,15 +1844,16 @@ class RTCManager {
           try {
             console.log(`🔄 Disabling video track for peer ${socketId}`);
             
-            const videoSender = pc.getSenders().find(sender => 
-              sender.track && sender.track.kind === 'video'
+            // Find video transceiver with active video track
+            const videoTransceiver = pc.getTransceivers().find(t => 
+              t.sender.track && t.sender.track.kind === 'video'
             );
             
-            if (videoSender) {
-              await videoSender.replaceTrack(null);
+            if (videoTransceiver && videoTransceiver.sender) {
+              await videoTransceiver.sender.replaceTrack(null);
               console.log(`✅ Disabled video track for peer connection ${socketId}`);
             } else {
-              console.warn(`⚠️ No active video sender found for disabling for ${socketId}`);
+              console.warn(`⚠️ No active video transceiver found for disabling for ${socketId}`);
             }
           } catch (error) {
             console.error(`❌ Error disabling video track for ${socketId}:`, error);
@@ -1818,29 +1866,17 @@ class RTCManager {
           try {
             console.log(`🔄 Enabling video track for peer ${socketId}`);
             
-            // Find the video sender using the same improved logic
-            let videoSender = null;
-            const transceivers = pc.getTransceivers();
-            
-            const videoTransceiver = transceivers.find(t => 
-              t.receiver.track && t.receiver.track.kind === 'video' || 
-              t.sender.track && t.sender.track.kind === 'video' ||
-              (t.mid !== null && t.receiver.track === null && t.sender.track === null)
+            // Find video transceiver
+            const videoTransceiver = pc.getTransceivers().find(t => 
+              t.receiver.track?.kind === 'video' || 
+              (t.sender.track === null && t.receiver.track === null && t.mid !== null)
             );
             
-            if (videoTransceiver) {
-              videoSender = videoTransceiver.sender;
-            } else {
-              videoSender = pc.getSenders().find(sender => 
-                sender.track === null || sender.track.kind === 'video'
-              );
-            }
-            
-            if (videoSender) {
-              await videoSender.replaceTrack(videoTrack);
+            if (videoTransceiver && videoTransceiver.sender) {
+              await videoTransceiver.sender.replaceTrack(videoTrack);
               console.log(`✅ Enabled video track for peer connection ${socketId}`);
             } else {
-              console.error(`❌ No video sender found for enabling video for ${socketId}`);
+              console.error(`❌ No video transceiver found for enabling video for ${socketId}`);
             }
           } catch (error) {
             console.error(`❌ Error enabling video track for ${socketId}:`, error);
@@ -3823,8 +3859,16 @@ window.debugTransceivers = function() {
   }
 };
 
-console.log('🐛 Debug functions available: debugCamera(), debugTransceivers()');
-console.log('💡 If camera visibility issues occur, run debugCamera() in console');
+window.forceRefreshVideo = function() {
+  if (window.rtcManager && window.rtcManager.forceRefreshVideoTracks) {
+    window.rtcManager.forceRefreshVideoTracks();
+  } else {
+    console.error('RTC Manager not available');
+  }
+};
+
+console.log('🐛 Debug functions available: debugCamera(), debugTransceivers(), forceRefreshVideo()');
+console.log('💡 If camera visibility issues occur, run debugCamera() then forceRefreshVideo()');
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', () => {
