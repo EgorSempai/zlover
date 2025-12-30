@@ -220,6 +220,8 @@ class RTCManager {
     this.peers = new Map(); // socketId -> RTCPeerConnection
     // FIXED: Added ICE candidate queue to handle race conditions
     this.pendingCandidates = new Map(); // socketId -> [candidates]
+    // FIXED: Store user information for nickname handling
+    this.userInfo = new Map(); // socketId -> { nickname, isHost, etc. }
     this.isAudioMuted = false;
     this.isVideoMuted = false;
     this.isScreenSharing = false;
@@ -264,6 +266,16 @@ class RTCManager {
     
     // Start connection monitoring
     this.startConnectionMonitoring();
+  }
+
+  // FIXED: Methods to store and retrieve user information
+  storeUserInfo(socketId, userInfo) {
+    this.userInfo.set(socketId, userInfo);
+    console.log(`📝 Stored user info for ${socketId}:`, userInfo);
+  }
+
+  getStoredUserInfo(socketId) {
+    return this.userInfo.get(socketId);
   }
 
   // FIXED: Add missing updateIceServers method
@@ -1095,8 +1107,17 @@ class RTCManager {
 
     // Handle incoming tracks
     pc.ontrack = (event) => {
+      console.log(`🎥 Received remote stream from ${socketId}`);
       const [remoteStream] = event.streams;
       uiManager.addRemoteVideo(socketId, remoteStream);
+      
+      // FIXED: Update nickname after video element is created
+      setTimeout(() => {
+        const user = this.getStoredUserInfo(socketId);
+        if (user && user.nickname) {
+          uiManager.updateUserName(socketId, user.nickname);
+        }
+      }, 100);
       
       // Set up remote audio analysis for active speaker detection
       this.setupRemoteAudioAnalysis(socketId, remoteStream);
@@ -1213,9 +1234,18 @@ class RTCManager {
   }
 
   async createOffer(socketId) {
+    console.log(`📞 Creating offer for ${socketId}`);
     const pc = this.createPeerConnection(socketId);
     
     try {
+      // FIXED: Ensure local stream is available before creating offer
+      if (!this.localStream) {
+        console.error(`❌ No local stream available when creating offer for ${socketId}`);
+        return;
+      }
+      
+      console.log(`🎥 Local stream tracks for ${socketId}:`, this.localStream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
+      
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true
@@ -1223,6 +1253,7 @@ class RTCManager {
       
       await pc.setLocalDescription(offer);
       
+      console.log(`📤 Sending offer to ${socketId}`);
       socketManager.emit('signal', {
         to: socketId,
         signal: {
@@ -1231,14 +1262,24 @@ class RTCManager {
         }
       });
     } catch (error) {
-      console.error('Error creating offer:', error);
+      console.error(`❌ Error creating offer for ${socketId}:`, error);
+      this.removePeer(socketId);
     }
   }
 
   async handleOffer(socketId, offer) {
+    console.log(`📥 Handling offer from ${socketId}`);
     const pc = this.createPeerConnection(socketId);
     
     try {
+      // FIXED: Ensure local stream is available before handling offer
+      if (!this.localStream) {
+        console.error(`❌ No local stream available when handling offer from ${socketId}`);
+        return;
+      }
+      
+      console.log(`🎥 Local stream tracks for ${socketId}:`, this.localStream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
+      
       await pc.setRemoteDescription(offer);
       
       // FIXED: Process pending candidates after setting remote description
@@ -1248,6 +1289,7 @@ class RTCManager {
       
       await pc.setLocalDescription(answer);
       
+      console.log(`📤 Sending answer to ${socketId}`);
       socketManager.emit('signal', {
         to: socketId,
         signal: {
@@ -1256,7 +1298,7 @@ class RTCManager {
         }
       });
     } catch (error) {
-      console.error('Error handling offer:', error);
+      console.error(`❌ Error handling offer from ${socketId}:`, error);
       // FIXED: Clean up on error
       this.removePeer(socketId);
     }
@@ -1471,6 +1513,9 @@ class RTCManager {
     
     // FIXED: Clean up pending candidates queue
     this.pendingCandidates.delete(socketId);
+    
+    // FIXED: Clean up stored user info
+    this.userInfo.delete(socketId);
     
     // Remove from UI
     uiManager.removeVideo(socketId);
@@ -3342,15 +3387,9 @@ class UIManager {
       nameElement.textContent = socketId === 'local' ? `${nickname} (You)` : nickname;
       console.log(`✅ Name updated for ${socketId}: ${nickname}`);
     } else {
-      console.warn(`❌ Name element not found for ${socketId}`);
-      // FIXED: Retry mechanism for elements that might not be created yet
-      setTimeout(() => {
-        const retryElement = document.getElementById(`name-${socketId}`);
-        if (retryElement) {
-          retryElement.textContent = socketId === 'local' ? `${nickname} (You)` : nickname;
-          console.log(`✅ Name updated on retry for ${socketId}: ${nickname}`);
-        }
-      }, 500);
+      console.warn(`❌ Name element not found for ${socketId}, will retry when video element is created`);
+      // FIXED: Don't retry immediately, let the ontrack handler do it
+      // The element will be updated when the video stream arrives and addRemoteVideo is called
     }
   }
 
@@ -3473,9 +3512,9 @@ socketManager.connect = function() {
     // FIXED: Handle existing users as objects with socketId and nickname
     data.users.forEach(user => {
       console.log('📞 Creating offer for:', user.socketId, 'nickname:', user.nickname);
+      // FIXED: Store user info before creating connection
+      rtcManager.storeUserInfo(user.socketId, { nickname: user.nickname });
       rtcManager.createOffer(user.socketId);
-      // FIXED: Set nickname immediately for existing users
-      uiManager.updateUserName(user.socketId, user.nickname);
     });
   });
   
@@ -3487,9 +3526,10 @@ socketManager.connect = function() {
       rtcManager.updateIceServers(data.iceServers);
     }
     
+    // FIXED: Store user info before any connection attempts
+    rtcManager.storeUserInfo(data.socketId, { nickname: data.nickname });
+    
     uiManager.updateUserCount(uiManager.userCount + 1);
-    // FIXED: Update user name immediately when they join
-    uiManager.updateUserName(data.socketId, data.nickname);
     NotificationManager.show(`🎮 ${data.nickname} ${uiManager.t('joinedSession')}`, 'success');
   });
   
