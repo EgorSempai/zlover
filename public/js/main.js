@@ -1446,6 +1446,79 @@ class RTCManager {
     }
   }
 
+  // FIXED: Enhanced ICE state change handling with TURN diagnostics
+  handleIceStateChange(socketId, iceState) {
+    console.log(`🧊 ICE state change for ${socketId}: ${iceState}`);
+    
+    switch (iceState) {
+      case 'checking':
+        console.log(`🔍 ICE checking connectivity for ${socketId}`);
+        break;
+      case 'connected':
+        console.log(`✅ ICE connected for ${socketId}`);
+        break;
+      case 'completed':
+        console.log(`🎉 ICE completed for ${socketId}`);
+        break;
+      case 'failed':
+        console.error(`❌ ICE failed for ${socketId} - TURN server may be down`);
+        NotificationManager.show('Connection failed - TURN server issue detected. Check /turn-test.html', 'error');
+        this.logTurnServerDiagnostics();
+        break;
+      case 'disconnected':
+        console.warn(`⚠️ ICE disconnected for ${socketId}`);
+        break;
+      case 'closed':
+        console.log(`🔒 ICE closed for ${socketId}`);
+        break;
+    }
+  }
+
+  // Add TURN server diagnostics logging
+  logTurnServerDiagnostics() {
+    console.log('🔍 === TURN SERVER DIAGNOSTICS ===');
+    console.log('Current ICE servers configuration:', this.iceServers);
+    
+    // Test TURN server connectivity
+    this.testTurnConnectivity().then(result => {
+      if (result.working) {
+        console.log('✅ TURN server connectivity test passed');
+      } else {
+        console.error('❌ TURN server connectivity test failed:', result.error);
+        NotificationManager.show('TURN server is not responding. Visit /turn-test.html for detailed diagnostics.', 'error');
+      }
+    });
+  }
+
+  // Quick TURN server connectivity test
+  async testTurnConnectivity() {
+    try {
+      const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+      let hasRelay = false;
+      
+      return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          pc.close();
+          resolve({ working: hasRelay, error: hasRelay ? null : 'No relay candidates found' });
+        }, 5000);
+        
+        pc.onicecandidate = (event) => {
+          if (event.candidate && event.candidate.type === 'relay') {
+            hasRelay = true;
+            clearTimeout(timeout);
+            pc.close();
+            resolve({ working: true, error: null });
+          }
+        };
+        
+        pc.createDataChannel('test');
+        pc.createOffer().then(offer => pc.setLocalDescription(offer));
+      });
+    } catch (error) {
+      return { working: false, error: error.message };
+    }
+  }
+
   removePeer(socketId) {
     const pc = this.peers.get(socketId);
     if (pc) {
@@ -2383,6 +2456,14 @@ class UIManager {
     if (leaveBtn) {
       leaveBtn.addEventListener('click', () => {
         this.leaveRoom();
+      });
+    }
+
+    // TURN test button
+    const turnTestBtn = document.getElementById('turn-test-btn');
+    if (turnTestBtn) {
+      turnTestBtn.addEventListener('click', () => {
+        window.open('/turn-test.html', '_blank');
       });
     }
 
