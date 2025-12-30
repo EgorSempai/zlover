@@ -783,7 +783,13 @@ class RTCManager {
         volume: 1.0,
         latency: 0.01
       },
-      video: false // Start with camera off by default
+      video: {
+        deviceId: this.currentSettings.selectedCamera ?
+          { exact: this.currentSettings.selectedCamera } : undefined,
+        width: { ideal: width, max: 1920 },
+        height: { ideal: height, max: 1080 },
+        frameRate: { ideal: 30, max: 30 }
+      }
     };
   }
 
