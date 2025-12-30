@@ -2387,32 +2387,6 @@ class UIManager {
       }
     });
 
-    // Skip loading button
-    const skipLoadingBtn = document.getElementById('skip-loading-btn');
-    if (skipLoadingBtn) {
-      skipLoadingBtn.addEventListener('click', () => {
-        console.log('User clicked skip loading');
-        this.skipLoading();
-      });
-    }
-  }
-
-  skipLoading() {
-    console.log('Skipping loading process...');
-    
-    // Create dummy stream
-    rtcManager.localStream = rtcManager.createDummyStream();
-    rtcManager.isVideoMuted = true;
-    rtcManager.isAudioMuted = true;
-    
-    // Connect to server
-    socketManager.connect();
-    
-    // Show main app immediately
-    setTimeout(() => {
-      this.showMainApp();
-      NotificationManager.show('Skipped media setup - using fallback mode', 'info');
-    }, 500);
   }
 
   async handleJoin() {
