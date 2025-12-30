@@ -944,6 +944,45 @@ class RTCManager {
     console.log('🐛 === END CAMERA DEBUG ===');
   }
 
+  // Emergency method to restore all connections when they break
+  async emergencyRestoreConnections() {
+    console.log('🚨 === EMERGENCY CONNECTION RESTORE ===');
+    
+    if (!this.localStream) {
+      console.error('❌ No local stream to restore');
+      return;
+    }
+    
+    console.log('🔄 Restoring all peer connections...');
+    
+    for (const [socketId, pc] of this.peers.entries()) {
+      try {
+        console.log(`🔄 Restoring connection for ${socketId}`);
+        
+        // Get all senders
+        const senders = pc.getSenders();
+        console.log(`📡 Current senders for ${socketId}:`, senders.map(s => s.track?.kind || 'null'));
+        
+        // Replace all tracks with current local stream tracks
+        for (const track of this.localStream.getTracks()) {
+          const sender = senders.find(s => s.track?.kind === track.kind || s.track === null);
+          if (sender) {
+            await sender.replaceTrack(track);
+            console.log(`✅ Restored ${track.kind} track for ${socketId}`);
+          } else {
+            console.warn(`⚠️ No sender found for ${track.kind} track for ${socketId}`);
+          }
+        }
+        
+      } catch (error) {
+        console.error(`❌ Error restoring connection for ${socketId}:`, error);
+      }
+    }
+    
+    console.log('🚨 === EMERGENCY RESTORE COMPLETE ===');
+    NotificationManager.show('Attempted to restore all connections', 'info');
+  }
+
   // Nuclear option: Force refresh all video tracks
   async forceRefreshVideoTracks() {
     console.log('🔄 === FORCE REFRESHING ALL VIDEO TRACKS ===');
@@ -998,7 +1037,7 @@ class RTCManager {
     NotificationManager.show('Force refreshed all video tracks', 'info');
   }
 
-  createPeerConnection(socketId) {
+  muteAudio() {
     const config = this.getRTCConfiguration();
     const pc = new RTCPeerConnection(config);
     
@@ -1007,68 +1046,19 @@ class RTCManager {
     // FIXED: Initialize pending candidates queue for this peer
     this.pendingCandidates.set(socketId, []);
     
-    // CRITICAL FIX: Always add transceivers BEFORE adding tracks
-    // This ensures proper transceiver setup for camera visibility
-    console.log(`📹 Setting up transceivers for ${socketId}`);
-    
-    // Add audio transceiver
-    const audioTransceiver = pc.addTransceiver('audio', {
-      direction: 'sendrecv'
-    });
-    console.log(`🎵 Added audio transceiver for ${socketId}:`, audioTransceiver.mid);
-    
-    // Add video transceiver - ALWAYS, even without video track
-    const videoTransceiver = pc.addTransceiver('video', {
-      direction: 'sendrecv'
-    });
-    console.log(`📹 Added video transceiver for ${socketId}:`, videoTransceiver.mid);
-    
-    // Now add local stream tracks to the existing transceivers
+    // SIMPLIFIED: Add local stream tracks directly (if available)
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => {
         console.log(`🔄 Adding ${track.kind} track to ${socketId}`);
-        
-        // Find the appropriate transceiver for this track
-        const transceiver = pc.getTransceivers().find(t => 
-          t.receiver.track === null && 
-          t.sender.track === null && 
-          ((track.kind === 'audio' && t === audioTransceiver) || 
-           (track.kind === 'video' && t === videoTransceiver))
-        );
-        
-        if (transceiver) {
-          // Replace the null track with our actual track
-          transceiver.sender.replaceTrack(track).then(() => {
-            console.log(`✅ Added ${track.kind} track to transceiver for ${socketId}`);
-            
-            // Configure encoding parameters
-            if (track.kind === 'audio') {
-              const params = transceiver.sender.getParameters();
-              if (params.encodings && params.encodings.length > 0) {
-                params.encodings[0].maxBitrate = this.currentSettings.audioBitrate;
-                params.encodings[0].priority = 'high';
-                params.encodings[0].networkPriority = 'high';
-              }
-              transceiver.sender.setParameters(params).catch(console.error);
-            } else if (track.kind === 'video') {
-              const params = transceiver.sender.getParameters();
-              if (params.encodings && params.encodings.length > 0) {
-                params.encodings[0].maxBitrate = this.currentSettings.videoBitrate;
-                params.encodings[0].maxFramerate = this.currentSettings.videoFramerate;
-                params.encodings[0].priority = 'medium';
-                params.encodings[0].networkPriority = 'medium';
-              }
-              transceiver.sender.setParameters(params).catch(console.error);
-            }
-          }).catch(error => {
-            console.error(`❌ Error adding ${track.kind} track to ${socketId}:`, error);
-          });
-        } else {
-          console.error(`❌ No available transceiver for ${track.kind} track for ${socketId}`);
-        }
+        pc.addTrack(track, this.localStream);
       });
-    } else {
-      console.log(`ℹ️ No local stream available when creating peer connection for ${socketId}`);
+    }
+    
+    // ALWAYS add video transceiver for future video (if no video track exists)
+    const hasVideoTrack = this.localStream && this.localStream.getVideoTracks().length > 0;
+    if (!hasVideoTrack) {
+      console.log(`📹 Adding video transceiver for future video track to ${socketId}`);
+      pc.addTransceiver('video', { direction: 'sendrecv' });
     }
 
     // Handle incoming tracks
@@ -3867,8 +3857,16 @@ window.forceRefreshVideo = function() {
   }
 };
 
-console.log('🐛 Debug functions available: debugCamera(), debugTransceivers(), forceRefreshVideo()');
-console.log('💡 If camera visibility issues occur, run debugCamera() then forceRefreshVideo()');
+window.emergencyRestore = function() {
+  if (window.rtcManager && window.rtcManager.emergencyRestoreConnections) {
+    window.rtcManager.emergencyRestoreConnections();
+  } else {
+    console.error('RTC Manager not available');
+  }
+};
+
+console.log('🐛 Debug functions available: debugCamera(), debugTransceivers(), forceRefreshVideo(), emergencyRestore()');
+console.log('💡 If everything disappears when new user joins, run emergencyRestore()');
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', () => {
