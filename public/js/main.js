@@ -213,14 +213,14 @@ class SocketManager {
   }
 }
 
-// SIMPLIFIED: Server-Relayed Media Manager (No P2P WebRTC)
+// Enhanced WebRTC Manager with Full P2P Support and High-Quality Codecs
 class RTCManager {
   constructor() {
     this.localStream = null;
     this.remoteStreams = new Map(); // socketId -> MediaStream
     this.userInfo = new Map(); // socketId -> { nickname, isHost, etc. }
-    this.peers = new Map(); // socketId -> RTCPeerConnection (for compatibility)
-    this.pendingCandidates = new Map(); // socketId -> [candidates] (for compatibility)
+    this.peers = new Map(); // socketId -> RTCPeerConnection
+    this.pendingCandidates = new Map(); // socketId -> [candidates]
     this.isAudioMuted = false;
     this.isVideoMuted = false;
     this.isScreenSharing = false;
@@ -229,7 +229,10 @@ class RTCManager {
     this.audioVisualizer = null;
     this.activeSpeaker = null;
     this.availableDevices = { audioInputs: [], videoInputs: [] };
-    this.initialized = false; // FIXED: Add initialization flag
+    this.initialized = false;
+    this.connectionErrors = [];
+    this.statsInterval = null;
+    this.pongListenerSet = false;
     
     // ICE servers configuration (will be updated from server)
     this.iceServers = [
@@ -237,10 +240,11 @@ class RTCManager {
       { urls: 'stun:stun2.l.google.com:19302' }
     ];
     
+    // ENHANCED: High-quality codec settings for better audio
     this.currentSettings = {
       audioCodec: 'opus',
       videoCodec: 'vp9',
-      audioBitrate: 128000,
+      audioBitrate: 256000, // Increased from 128k to 256k for better quality
       videoBitrate: 2000000,
       audioChannels: 2,
       sampleRate: 48000,
@@ -248,21 +252,25 @@ class RTCManager {
       noiseSuppression: true,
       autoGainControl: true,
       stereoEnabled: true,
-      dtxEnabled: false,
+      dtxEnabled: false, // Disable DTX for better quality
       selectedMicrophone: '',
       selectedCamera: '',
       videoResolution: '1280x720',
       videoFramerate: 30,
-      audioVisualizerEnabled: true
+      audioVisualizerEnabled: true,
+      // ENHANCED: Advanced audio settings for high quality
+      opusComplexity: 10, // Maximum complexity for best quality
+      opusFec: true, // Forward Error Correction
+      opusUseDtx: false, // Disable DTX for consistent quality
+      opusMaxPlaybackRate: 48000
     };
     
-    console.log('🚀 RTCManager initialized in SERVER-RELAY mode (No P2P)');
-    this.initialized = true; // FIXED: Mark as initialized
+    console.log('🚀 RTCManager initialized with FULL WebRTC P2P support and enhanced codecs');
+    this.initialized = true;
   }
 
-  // SIMPLIFIED: Store and retrieve user information
+  // Store and retrieve user information
   storeUserInfo(socketId, userInfo) {
-    // FIXED: Add initialization check
     if (!this.initialized) {
       console.warn('⚠️ RTCManager not initialized yet, queuing user info storage');
       setTimeout(() => this.storeUserInfo(socketId, userInfo), 100);
@@ -272,12 +280,7 @@ class RTCManager {
     this.userInfo.set(socketId, userInfo);
     console.log(`📝 Stored user info for ${socketId}:`, userInfo);
     
-    // SIMPLIFIED: Immediately create placeholder for remote user
-    if (socketId !== 'local') {
-      this.createRemoteUserPlaceholder(socketId, userInfo.nickname);
-    }
-    
-    // FIXED: Update nickname in UI immediately
+    // Update nickname in UI when user info is stored
     setTimeout(() => {
       if (uiManager && uiManager.updateUserName) {
         uiManager.updateUserName(socketId, userInfo.nickname);
@@ -287,39 +290,6 @@ class RTCManager {
 
   getStoredUserInfo(socketId) {
     return this.userInfo.get(socketId);
-  }
-
-  // SIMPLIFIED: Create placeholder for remote user (no WebRTC)
-  createRemoteUserPlaceholder(socketId, nickname) {
-    console.log(`👤 Creating placeholder for remote user: ${socketId} (${nickname})`);
-    
-    // FIXED: Use uiManager's addRemoteVideo method instead of duplicating logic
-    if (uiManager && uiManager.addRemoteVideo) {
-      // Create a simple placeholder stream (black video + silence)
-      const canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = 480;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#1a1a1a';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#fff';
-      ctx.font = '24px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText(`${nickname}`, canvas.width/2, canvas.height/2 - 20);
-      ctx.fillText('(Camera Off)', canvas.width/2, canvas.height/2 + 20);
-      
-      const stream = canvas.captureStream(1); // 1 FPS
-      
-      // Add to UI using the proper method
-      uiManager.addRemoteVideo(socketId, stream);
-      
-      // FIXED: Update nickname after a short delay to ensure element exists
-      setTimeout(() => {
-        uiManager.updateUserName(socketId, nickname);
-      }, 300);
-    } else {
-      console.warn('⚠️ UIManager not available for creating remote user placeholder');
-    }
   }
 
   // SIMPLIFIED: No complex WebRTC initialization needed
@@ -375,42 +345,66 @@ class RTCManager {
   }
 
   async requestMediaWithFallback() {
-    // Try with both audio and video first
+    // ENHANCED: Try with high-quality audio and video settings
     try {
       const constraints = {
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 48000,
-          channelCount: 2
+          echoCancellation: this.currentSettings.echoCancellation,
+          noiseSuppression: this.currentSettings.noiseSuppression,
+          autoGainControl: this.currentSettings.autoGainControl,
+          sampleRate: { ideal: this.currentSettings.sampleRate, min: 44100 },
+          channelCount: { ideal: this.currentSettings.audioChannels },
+          // ENHANCED: Advanced audio constraints for better quality
+          latency: { ideal: 0.01 }, // Low latency for real-time communication
+          volume: { ideal: 1.0 },
+          deviceId: this.currentSettings.selectedMicrophone ? 
+            { exact: this.currentSettings.selectedMicrophone } : undefined
         },
         video: {
           width: { ideal: 1280, max: 1920 },
           height: { ideal: 720, max: 1080 },
-          frameRate: { ideal: 30, max: 30 }
+          frameRate: { ideal: this.currentSettings.videoFramerate, max: 60 },
+          deviceId: this.currentSettings.selectedCamera ? 
+            { exact: this.currentSettings.selectedCamera } : undefined,
+          // ENHANCED: Video quality settings
+          aspectRatio: { ideal: 16/9 },
+          facingMode: 'user'
         }
       };
       
-      console.log('🎤 Requesting media with constraints:', constraints);
+      console.log('🎤 Requesting ENHANCED media with constraints:', constraints);
       return await navigator.mediaDevices.getUserMedia(constraints);
       
     } catch (error) {
-      console.log('🎤 Fallback: Trying audio only...');
+      console.log('🎤 Fallback: Trying high-quality audio only...');
       
-      // Try audio only
+      // Try high-quality audio only
       try {
         return await navigator.mediaDevices.getUserMedia({
           video: false,
           audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
+            echoCancellation: this.currentSettings.echoCancellation,
+            noiseSuppression: this.currentSettings.noiseSuppression,
+            autoGainControl: this.currentSettings.autoGainControl,
+            sampleRate: { ideal: this.currentSettings.sampleRate, min: 44100 },
+            channelCount: { ideal: this.currentSettings.audioChannels },
+            latency: { ideal: 0.01 },
+            volume: { ideal: 1.0 }
           }
         });
       } catch (audioError) {
-        console.log('🎤 No media access, will use dummy stream');
-        throw audioError;
+        console.log('🎤 Fallback: Trying basic audio...');
+        
+        // Final fallback with basic audio
+        try {
+          return await navigator.mediaDevices.getUserMedia({
+            video: false,
+            audio: true
+          });
+        } catch (basicError) {
+          console.log('🎤 No media access, will use dummy stream');
+          throw basicError;
+        }
       }
     }
   }
@@ -493,17 +487,85 @@ class RTCManager {
     }
   }
 
-  // SIMPLIFIED: No complex device switching needed
+  // Device switching functionality
   async switchDevice(deviceType, deviceId) {
-    console.log(`🔄 Device switching disabled in SIMPLIFIED mode`);
-    NotificationManager.show('Device switching not available in simplified mode', 'info');
-    return false;
+    console.log(`🔄 Switching ${deviceType} to device: ${deviceId}`);
+    
+    try {
+      if (deviceType === 'microphone') {
+        this.currentSettings.selectedMicrophone = deviceId;
+      } else if (deviceType === 'camera') {
+        this.currentSettings.selectedCamera = deviceId;
+      }
+      
+      // Reinitialize media with new device
+      await this.initializeMedia();
+      
+      // Update all peer connections with new stream
+      if (this.localStream) {
+        this.peers.forEach(async (pc, socketId) => {
+          const senders = pc.getSenders();
+          
+          for (const sender of senders) {
+            if (sender.track) {
+              const newTrack = this.localStream.getTracks().find(
+                track => track.kind === sender.track.kind
+              );
+              
+              if (newTrack) {
+                await sender.replaceTrack(newTrack);
+                console.log(`✅ Replaced ${sender.track.kind} track for ${socketId}`);
+              }
+            }
+          }
+        });
+      }
+      
+      NotificationManager.show(`${deviceType} switched successfully`, 'success');
+      return true;
+      
+    } catch (error) {
+      console.error(`Error switching ${deviceType}:`, error);
+      NotificationManager.show(`Failed to switch ${deviceType}`, 'error');
+      return false;
+    }
   }
 
-  // SIMPLIFIED: No device testing needed
+  // Device testing functionality
   async testDevice(deviceType, deviceId) {
-    console.log(`🧪 Device testing disabled in SIMPLIFIED mode`);
-    return false;
+    console.log(`🧪 Testing ${deviceType}: ${deviceId}`);
+    
+    try {
+      const constraints = {};
+      
+      if (deviceType === 'microphone') {
+        constraints.audio = {
+          deviceId: { exact: deviceId },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        };
+      } else if (deviceType === 'camera') {
+        constraints.video = {
+          deviceId: { exact: deviceId },
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        };
+      }
+      
+      const testStream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      // Test successful, stop the test stream
+      testStream.getTracks().forEach(track => track.stop());
+      
+      NotificationManager.show(`${deviceType} test successful`, 'success');
+      return true;
+      
+    } catch (error) {
+      console.error(`Error testing ${deviceType}:`, error);
+      NotificationManager.show(`${deviceType} test failed: ${error.message}`, 'error');
+      return false;
+    }
   }
 
   async initializeAudioVisualizer() {
@@ -596,51 +658,129 @@ class RTCManager {
     }
   }
 
-  // SIMPLIFIED: No WebRTC peer connections needed
-  createOffer(socketId) {
-    // FIXED: Add initialization check
-    if (!this.initialized) {
-      console.warn('⚠️ RTCManager not initialized yet, queuing createOffer');
-      setTimeout(() => this.createOffer(socketId), 100);
-      return;
-    }
+  // ENHANCED: Full WebRTC peer connection creation with high-quality codecs
+  async createOffer(socketId) {
+    console.log(`📞 Creating WebRTC offer for ${socketId}`);
+    const pc = this.createPeerConnection(socketId);
     
-    console.log(`📞 SIMPLIFIED: Skipping WebRTC offer creation for ${socketId}`);
-    // In simplified mode, we just create placeholders
-    const userInfo = this.getStoredUserInfo(socketId);
-    if (userInfo) {
-      this.createRemoteUserPlaceholder(socketId, userInfo.nickname);
+    try {
+      // Ensure local stream is available
+      if (!this.localStream) {
+        console.error(`❌ No local stream available when creating offer for ${socketId}`);
+        return;
+      }
+      
+      console.log(`🎥 Local stream tracks for ${socketId}:`, this.localStream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
+      
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
+      });
+      
+      // ENHANCED: Apply high-quality codec settings to SDP
+      offer.sdp = this.enhanceAudioSDP(offer.sdp);
+      offer.sdp = this.enhanceVideoSDP(offer.sdp);
+      
+      await pc.setLocalDescription(offer);
+      
+      console.log(`📤 Sending enhanced offer to ${socketId}`);
+      socketManager.emit('signal', {
+        to: socketId,
+        signal: {
+          type: 'offer',
+          offer: offer
+        }
+      });
+    } catch (error) {
+      console.error(`❌ Error creating offer for ${socketId}:`, error);
+      this.removePeer(socketId);
     }
   }
 
-  handleOffer(socketId, offer) {
-    // FIXED: Add initialization check
-    if (!this.initialized) {
-      console.warn('⚠️ RTCManager not initialized yet, ignoring offer');
-      return;
-    }
+  async handleOffer(socketId, offer) {
+    console.log(`📥 Handling WebRTC offer from ${socketId}`);
+    const pc = this.createPeerConnection(socketId);
     
-    console.log(`📥 SIMPLIFIED: Skipping WebRTC offer handling from ${socketId}`);
+    try {
+      // Ensure local stream is available
+      if (!this.localStream) {
+        console.error(`❌ No local stream available when handling offer from ${socketId}`);
+        return;
+      }
+      
+      console.log(`🎥 Local stream tracks for ${socketId}:`, this.localStream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
+      
+      // ENHANCED: Apply codec enhancements to incoming offer
+      offer.sdp = this.enhanceAudioSDP(offer.sdp);
+      offer.sdp = this.enhanceVideoSDP(offer.sdp);
+      
+      await pc.setRemoteDescription(offer);
+      
+      // Process pending candidates after setting remote description
+      this.processPendingCandidates(socketId);
+      
+      const answer = await pc.createAnswer();
+      
+      // ENHANCED: Apply codec enhancements to answer
+      answer.sdp = this.enhanceAudioSDP(answer.sdp);
+      answer.sdp = this.enhanceVideoSDP(answer.sdp);
+      
+      await pc.setLocalDescription(answer);
+      
+      console.log(`📤 Sending enhanced answer to ${socketId}`);
+      socketManager.emit('signal', {
+        to: socketId,
+        signal: {
+          type: 'answer',
+          answer: answer
+        }
+      });
+    } catch (error) {
+      console.error(`❌ Error handling offer from ${socketId}:`, error);
+      this.removePeer(socketId);
+    }
   }
 
-  handleAnswer(socketId, answer) {
-    // FIXED: Add initialization check
-    if (!this.initialized) {
-      console.warn('⚠️ RTCManager not initialized yet, ignoring answer');
-      return;
+  async handleAnswer(socketId, answer) {
+    console.log(`📥 Handling WebRTC answer from ${socketId}`);
+    const pc = this.peers.get(socketId);
+    if (pc) {
+      try {
+        // ENHANCED: Apply codec enhancements to incoming answer
+        answer.sdp = this.enhanceAudioSDP(answer.sdp);
+        answer.sdp = this.enhanceVideoSDP(answer.sdp);
+        
+        await pc.setRemoteDescription(answer);
+        
+        // Process pending candidates after setting remote description
+        this.processPendingCandidates(socketId);
+      } catch (error) {
+        console.error('Error handling answer:', error);
+        this.removePeer(socketId);
+      }
     }
-    
-    console.log(`📥 SIMPLIFIED: Skipping WebRTC answer handling from ${socketId}`);
   }
 
-  handleIceCandidate(socketId, candidate) {
-    // FIXED: Add initialization check
-    if (!this.initialized) {
-      console.warn('⚠️ RTCManager not initialized yet, ignoring ICE candidate');
-      return;
+  async handleIceCandidate(socketId, candidate) {
+    console.log(`🧊 Handling ICE candidate from ${socketId}`);
+    const pc = this.peers.get(socketId);
+    if (pc) {
+      try {
+        // Check if remote description is set before adding candidate
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+          await pc.addIceCandidate(candidate);
+          console.log(`✅ Added ICE candidate for ${socketId}`);
+        } else {
+          // Queue candidate if remote description not set yet
+          console.log(`📦 Queuing ICE candidate for ${socketId} (remote description not set)`);
+          const pendingCandidates = this.pendingCandidates.get(socketId) || [];
+          pendingCandidates.push(candidate);
+          this.pendingCandidates.set(socketId, pendingCandidates);
+        }
+      } catch (error) {
+        console.error('Error adding ICE candidate:', error);
+      }
     }
-    
-    console.log(`🧊 SIMPLIFIED: Skipping ICE candidate handling from ${socketId}`);
   }
 
   removePeer(socketId) {
@@ -674,6 +814,29 @@ class RTCManager {
     localStorage.setItem('zloer-settings', JSON.stringify(this.currentSettings));
   }
 
+  // Get connection statistics for monitoring codec performance
+  getConnectionStats() {
+    const stats = {
+      totalPeers: this.peers.size,
+      connectedPeers: 0,
+      audioCodec: this.currentSettings.audioCodec,
+      videoCodec: this.currentSettings.videoCodec,
+      audioBitrate: this.currentSettings.audioBitrate,
+      videoBitrate: this.currentSettings.videoBitrate,
+      connectionStates: {}
+    };
+    
+    this.peers.forEach((pc, socketId) => {
+      const state = pc.connectionState;
+      stats.connectionStates[socketId] = state;
+      if (state === 'connected') {
+        stats.connectedPeers++;
+      }
+    });
+    
+    return stats;
+  }
+
   createPeerConnection(socketId) {
     const config = this.getRTCConfiguration();
     const pc = new RTCPeerConnection(config);
@@ -683,16 +846,31 @@ class RTCManager {
     // FIXED: Initialize pending candidates queue for this peer
     this.pendingCandidates.set(socketId, []);
     
-    // Add local stream tracks with enhanced settings
+    // Add local stream tracks with ENHANCED settings for high-quality audio
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => {
         const sender = pc.addTrack(track, this.localStream);
         
-        // Configure audio encoding parameters for better quality
+        // ENHANCED: Configure audio encoding parameters for maximum quality
         if (track.kind === 'audio') {
           const params = sender.getParameters();
           if (params.encodings && params.encodings.length > 0) {
-            params.encodings[0].maxBitrate = 128000; // 128 kbps for high-quality audio
+            // Use the enhanced bitrate from settings
+            params.encodings[0].maxBitrate = this.currentSettings.audioBitrate;
+            params.encodings[0].priority = 'high'; // High priority for audio
+            params.encodings[0].networkPriority = 'high';
+          }
+          sender.setParameters(params).catch(console.error);
+        }
+        
+        // ENHANCED: Configure video encoding parameters
+        if (track.kind === 'video') {
+          const params = sender.getParameters();
+          if (params.encodings && params.encodings.length > 0) {
+            params.encodings[0].maxBitrate = this.currentSettings.videoBitrate;
+            params.encodings[0].maxFramerate = this.currentSettings.videoFramerate;
+            params.encodings[0].priority = 'medium';
+            params.encodings[0].networkPriority = 'medium';
           }
           sender.setParameters(params).catch(console.error);
         }
@@ -898,36 +1076,73 @@ class RTCManager {
     }
   }
 
+  // ENHANCED: Advanced audio SDP enhancement for high-quality codecs
   enhanceAudioSDP(sdp) {
     let enhancedSDP = sdp;
     
     // Configure based on current settings
-    const { audioCodec, audioBitrate, audioChannels, stereoEnabled, dtxEnabled } = this.currentSettings;
+    const { audioCodec, audioBitrate, audioChannels, stereoEnabled, dtxEnabled, opusComplexity, opusFec, opusMaxPlaybackRate } = this.currentSettings;
     
     if (audioCodec === 'opus') {
-      // Set Opus parameters
+      // ENHANCED: Advanced Opus parameters for maximum quality
       const opusParams = [
         `maxaveragebitrate=${audioBitrate}`,
+        `maxplaybackrate=${opusMaxPlaybackRate}`,
         audioChannels === 2 && stereoEnabled ? 'stereo=1' : 'stereo=0',
         audioChannels === 2 && stereoEnabled ? 'sprop-stereo=1' : 'sprop-stereo=0',
-        dtxEnabled ? 'usedtx=1' : 'usedtx=0'
+        dtxEnabled ? 'usedtx=1' : 'usedtx=0',
+        `useinbandfec=${opusFec ? '1' : '0'}`, // Forward Error Correction
+        `complexity=${opusComplexity}`, // Maximum complexity for best quality
+        'cbr=0', // Variable bitrate for better quality
+        'vbr=1' // Enable variable bitrate
       ].join(';');
       
+      // Apply Opus parameters to all Opus codecs
       enhancedSDP = enhancedSDP.replace(
-        /(a=fmtp:\d+ .*)/g,
-        `$1;${opusParams}`
+        /(a=fmtp:(\d+) .*opus.*)/gi,
+        (match, line, payloadType) => {
+          // Check if this line already has parameters
+          if (line.includes('maxaveragebitrate')) {
+            return line; // Already enhanced
+          }
+          return `${line};${opusParams}`;
+        }
       );
       
-      // Prefer Opus codec
+      // If no existing fmtp line for Opus, add one
+      const opusPayloadMatch = enhancedSDP.match(/a=rtpmap:(\d+) opus/i);
+      if (opusPayloadMatch && !enhancedSDP.includes(`a=fmtp:${opusPayloadMatch[1]}`)) {
+        const payloadType = opusPayloadMatch[1];
+        const rtpmapLine = `a=rtpmap:${payloadType} opus/48000/2`;
+        enhancedSDP = enhancedSDP.replace(
+          rtpmapLine,
+          `${rtpmapLine}\r\na=fmtp:${payloadType} ${opusParams}`
+        );
+      }
+      
+      // Prefer Opus codec by reordering m= line
       enhancedSDP = enhancedSDP.replace(
-        /(m=audio \d+ UDP\/TLS\/RTP\/SAVPF) (\d+)/g,
-        (match, prefix, codecId) => {
-          const codecs = enhancedSDP.match(/a=rtpmap:(\d+) opus/);
-          if (codecs) {
-            const opusId = codecs[1];
-            return `${prefix} ${opusId}`;
-          }
-          return match;
+        /(m=audio \d+ UDP\/TLS\/RTP\/SAVPF) ([\d\s]+)/g,
+        (match, prefix, codecList) => {
+          const codecs = codecList.trim().split(' ');
+          const opusCodecs = [];
+          const otherCodecs = [];
+          
+          // Find Opus codec payload types
+          const opusMatches = enhancedSDP.match(/a=rtpmap:(\d+) opus/gi);
+          const opusPayloads = opusMatches ? opusMatches.map(m => m.match(/a=rtpmap:(\d+)/)[1]) : [];
+          
+          codecs.forEach(codec => {
+            if (opusPayloads.includes(codec)) {
+              opusCodecs.push(codec);
+            } else {
+              otherCodecs.push(codec);
+            }
+          });
+          
+          // Put Opus first
+          const reorderedCodecs = [...opusCodecs, ...otherCodecs].join(' ');
+          return `${prefix} ${reorderedCodecs}`;
         }
       );
     } else {
@@ -945,8 +1160,17 @@ class RTCManager {
         if (codecs) {
           const codecId = codecs[1];
           enhancedSDP = enhancedSDP.replace(
-            /(m=audio \d+ UDP\/TLS\/RTP\/SAVPF) (\d+)/g,
-            `$1 ${codecId}`
+            /(m=audio \d+ UDP\/TLS\/RTP\/SAVPF) ([\d\s]+)/g,
+            (match, prefix, codecList) => {
+              const reorderedCodecs = codecList.trim().split(' ');
+              // Move preferred codec to front
+              const index = reorderedCodecs.indexOf(codecId);
+              if (index > 0) {
+                reorderedCodecs.splice(index, 1);
+                reorderedCodecs.unshift(codecId);
+              }
+              return `${prefix} ${reorderedCodecs.join(' ')}`;
+            }
           );
         }
       }
@@ -955,36 +1179,94 @@ class RTCManager {
     return enhancedSDP;
   }
 
+  // ENHANCED: Advanced video SDP enhancement for high-quality codecs
   enhanceVideoSDP(sdp) {
     let enhancedSDP = sdp;
     
     const { videoCodec, videoBitrate } = this.currentSettings;
     
-    // Set video bitrate
+    // ENHANCED: Advanced video codec parameters
+    if (videoCodec === 'vp9') {
+      // VP9 specific enhancements
+      const vp9PayloadMatch = enhancedSDP.match(/a=rtpmap:(\d+) VP9/i);
+      if (vp9PayloadMatch) {
+        const payloadType = vp9PayloadMatch[1];
+        const vp9Params = [
+          'profile-id=0', // Profile 0 for better compatibility
+          'level-id=30'   // Level 3.0 for 720p
+        ].join(';');
+        
+        // Add or enhance VP9 fmtp line
+        if (!enhancedSDP.includes(`a=fmtp:${payloadType}`)) {
+          const rtpmapLine = `a=rtpmap:${payloadType} VP9/90000`;
+          enhancedSDP = enhancedSDP.replace(
+            rtpmapLine,
+            `${rtpmapLine}\r\na=fmtp:${payloadType} ${vp9Params}`
+          );
+        }
+      }
+    } else if (videoCodec === 'h264') {
+      // H.264 specific enhancements
+      const h264PayloadMatch = enhancedSDP.match(/a=rtpmap:(\d+) H264/i);
+      if (h264PayloadMatch) {
+        const payloadType = h264PayloadMatch[1];
+        const h264Params = [
+          'level-asymmetry-allowed=1',
+          'packetization-mode=1',
+          'profile-level-id=42e01f' // Baseline profile, level 3.1
+        ].join(';');
+        
+        // Add or enhance H.264 fmtp line
+        if (!enhancedSDP.includes(`a=fmtp:${payloadType}`)) {
+          const rtpmapLine = `a=rtpmap:${payloadType} H264/90000`;
+          enhancedSDP = enhancedSDP.replace(
+            rtpmapLine,
+            `${rtpmapLine}\r\na=fmtp:${payloadType} ${h264Params}`
+          );
+        }
+      }
+    }
+    
+    // Set video bitrate using b= line (more reliable than fmtp)
     enhancedSDP = enhancedSDP.replace(
-      /(a=fmtp:\d+ .*)/g,
-      `$1;x-google-max-bitrate=${Math.floor(videoBitrate / 1000)}`
+      /(m=video \d+ UDP\/TLS\/RTP\/SAVPF [\d\s]+)/g,
+      `$1\r\nb=AS:${Math.floor(videoBitrate / 1000)}`
     );
     
-    // Prefer selected video codec
+    // Prefer selected video codec by reordering m= line
     const codecMap = {
       'vp8': 'VP8',
       'vp9': 'VP9',
       'h264': 'H264',
-      'av1': 'AV1'
+      'av1': 'AV01'
     };
     
     const codecName = codecMap[videoCodec];
     if (codecName) {
-      const codecRegex = new RegExp(`a=rtpmap:(\\d+) ${codecName}`, 'i');
-      const codecs = enhancedSDP.match(codecRegex);
-      if (codecs) {
-        const codecId = codecs[1];
-        enhancedSDP = enhancedSDP.replace(
-          /(m=video \d+ UDP\/TLS\/RTP\/SAVPF) (\d+)/g,
-          `$1 ${codecId}`
-        );
-      }
+      enhancedSDP = enhancedSDP.replace(
+        /(m=video \d+ UDP\/TLS\/RTP\/SAVPF) ([\d\s]+)/g,
+        (match, prefix, codecList) => {
+          const codecs = codecList.trim().split(' ');
+          const preferredCodecs = [];
+          const otherCodecs = [];
+          
+          // Find preferred codec payload types
+          const codecMatches = enhancedSDP.match(new RegExp(`a=rtpmap:(\\d+) ${codecName}`, 'gi'));
+          const codecPayloads = codecMatches ? codecMatches.map(m => m.match(/a=rtpmap:(\d+)/)[1]) : [];
+          
+          codecs.forEach(codec => {
+            if (codecPayloads.includes(codec)) {
+              preferredCodecs.push(codec);
+            } else {
+              otherCodecs.push(codec);
+            }
+          });
+          
+          // Put preferred codec first
+          const reorderedCodecs = [...preferredCodecs, ...otherCodecs].join(' ');
+          return `${prefix} ${reorderedCodecs}`;
+        }
+      );
     }
     
     return enhancedSDP;
