@@ -784,8 +784,30 @@ class RTCManager {
 
   // Get RTC configuration for WebRTC connections
   getRTCConfiguration() {
+    // Add fallback ICE servers in case primary TURN server fails
+    const fallbackIceServers = [
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      // Backup TURN servers for reliability
+      {
+        urls: 'turn:openrelay.metered.ca:80',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      },
+      {
+        urls: 'turn:openrelay.metered.ca:443',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      }
+    ];
+    
+    // Combine primary ICE servers with fallbacks
+    const allIceServers = [...this.iceServers, ...fallbackIceServers];
+    
     return {
-      iceServers: this.iceServers,
+      iceServers: allIceServers,
       iceTransportPolicy: 'all',
       iceCandidatePoolSize: 2,
       bundlePolicy: 'max-bundle',
@@ -938,11 +960,11 @@ class RTCManager {
     const hasVideoTrack = this.localStream && this.localStream.getVideoTracks().length > 0;
     if (!hasVideoTrack) {
       // Add a video transceiver for future video track
-      // Start with recvonly since we don't have video yet, will change to sendrecv when video is added
+      // Use sendrecv from the start to avoid direction changes that cause renegotiation
       const videoTransceiver = pc.addTransceiver('video', {
-        direction: 'recvonly'
+        direction: 'sendrecv'
       });
-      console.log(`📹 Added video transceiver (recvonly) for future video track to ${socketId}`);
+      console.log(`📹 Added video transceiver (sendrecv) for future video track to ${socketId}`);
       console.log(`📹 Transceiver details: direction=${videoTransceiver.direction}, mid=${videoTransceiver.mid}`);
     } else {
       console.log(`📹 Video track already exists for ${socketId}, not adding transceiver`);
@@ -1015,17 +1037,23 @@ class RTCManager {
       console.log(`Connection state with ${socketId}:`, pc.connectionState);
       
       if (pc.connectionState === 'failed') {
-        console.error(`❌ Connection failed with ${socketId}, attempting ICE restart`);
-        this.handleConnectionFailure(socketId);
-      } else if (pc.connectionState === 'disconnected') {
-        console.warn(`⚠️ Connection disconnected with ${socketId}, monitoring for recovery`);
-        // Give it 10 seconds to recover before attempting restart
+        console.error(`❌ Connection failed with ${socketId}`);
+        // Don't immediately restart ICE - give it time to recover
         setTimeout(() => {
-          if (pc.connectionState === 'disconnected') {
-            console.log(`🔄 Attempting ICE restart for ${socketId} after timeout`);
+          if (pc.connectionState === 'failed') {
+            console.log(`🔄 Attempting ICE restart for ${socketId} after delay`);
             this.handleConnectionFailure(socketId);
           }
-        }, 10000);
+        }, 5000); // Wait 5 seconds before attempting restart
+      } else if (pc.connectionState === 'disconnected') {
+        console.warn(`⚠️ Connection disconnected with ${socketId}, monitoring for recovery`);
+        // Give it more time to recover before attempting restart
+        setTimeout(() => {
+          if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+            console.log(`🔄 Attempting recovery for ${socketId} after timeout`);
+            this.handleConnectionFailure(socketId);
+          }
+        }, 15000); // Increased from 10s to 15s
       } else if (pc.connectionState === 'connected') {
         console.log(`✅ Connection established with ${socketId}`);
         NotificationManager.show('Peer connected successfully', 'success');
@@ -1489,9 +1517,15 @@ class RTCManager {
         console.log(`🎉 ICE completed for ${socketId}`);
         break;
       case 'failed':
-        console.error(`❌ ICE failed for ${socketId} - TURN server may be down`);
-        NotificationManager.show('Connection failed - TURN server issue detected. Check /turn-test.html', 'error');
-        this.logTurnServerDiagnostics();
+        console.error(`❌ ICE failed for ${socketId} - Connection issue detected`);
+        // Don't immediately show error - ICE can recover
+        setTimeout(() => {
+          const pc = this.peers.get(socketId);
+          if (pc && pc.iceConnectionState === 'failed') {
+            NotificationManager.show('Connection failed - Check network or TURN server', 'error');
+            console.log('💡 Visit /turn-test.html to test TURN server connectivity');
+          }
+        }, 3000);
         break;
       case 'disconnected':
         console.warn(`⚠️ ICE disconnected for ${socketId}`);
@@ -1506,6 +1540,8 @@ class RTCManager {
   logTurnServerDiagnostics() {
     console.log('🔍 === TURN SERVER DIAGNOSTICS ===');
     console.log('Current ICE servers configuration:', this.iceServers);
+    console.log('💡 If connections keep failing, visit /turn-test.html to test TURN server');
+    console.log('🔧 Fallback TURN servers are automatically included for reliability');
     
     // Test TURN server connectivity
     this.testTurnConnectivity().then(result => {
@@ -1513,7 +1549,7 @@ class RTCManager {
         console.log('✅ TURN server connectivity test passed');
       } else {
         console.error('❌ TURN server connectivity test failed:', result.error);
-        NotificationManager.show('TURN server is not responding. Visit /turn-test.html for detailed diagnostics.', 'error');
+        console.log('🔄 Using fallback TURN servers for connection reliability');
       }
     });
   }
@@ -1640,34 +1676,6 @@ class RTCManager {
               // Replace the track (or set it if it was null)
               await videoSender.replaceTrack(newVideoTrack);
               
-              // Change transceiver direction to sendrecv now that we have video
-              const videoTransceiver = pc.getTransceivers().find(t => 
-                t.sender === videoSender
-              );
-              if (videoTransceiver && videoTransceiver.direction !== 'sendrecv') {
-                videoTransceiver.direction = 'sendrecv';
-                console.log(`🔄 Changed video transceiver direction to sendrecv for ${socketId}`);
-                
-                // Trigger renegotiation to ensure the direction change takes effect
-                if (pc.signalingState === 'stable') {
-                  try {
-                    const offer = await pc.createOffer();
-                    await pc.setLocalDescription(offer);
-                    
-                    socketManager.emit('signal', {
-                      to: socketId,
-                      signal: {
-                        type: 'offer',
-                        offer: offer
-                      }
-                    });
-                    console.log(`🔄 Sent renegotiation offer to ${socketId} for video direction change`);
-                  } catch (renegotiationError) {
-                    console.error(`❌ Renegotiation failed for ${socketId}:`, renegotiationError);
-                  }
-                }
-              }
-              
               // Configure video encoding parameters
               const params = videoSender.getParameters();
               if (params.encodings && params.encodings.length > 0) {
@@ -1721,16 +1729,6 @@ class RTCManager {
             
             if (videoSender) {
               await videoSender.replaceTrack(null);
-              
-              // Change transceiver direction to recvonly when disabling video
-              const videoTransceiver = pc.getTransceivers().find(t => 
-                t.sender === videoSender
-              );
-              if (videoTransceiver && videoTransceiver.direction !== 'recvonly') {
-                videoTransceiver.direction = 'recvonly';
-                console.log(`🔄 Changed video transceiver direction to recvonly for ${socketId}`);
-              }
-              
               console.log(`✅ Disabled video track for peer connection ${socketId}`);
             }
           } catch (error) {
@@ -1748,16 +1746,6 @@ class RTCManager {
             
             if (videoSender) {
               await videoSender.replaceTrack(videoTrack);
-              
-              // Change transceiver direction to sendrecv when enabling video
-              const videoTransceiver = pc.getTransceivers().find(t => 
-                t.sender === videoSender
-              );
-              if (videoTransceiver && videoTransceiver.direction !== 'sendrecv') {
-                videoTransceiver.direction = 'sendrecv';
-                console.log(`🔄 Changed video transceiver direction to sendrecv for ${socketId}`);
-              }
-              
               console.log(`✅ Enabled video track for peer connection ${socketId}`);
             }
           } catch (error) {
