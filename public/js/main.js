@@ -292,7 +292,7 @@ class RTCManager {
     return this.userInfo.get(socketId);
   }
 
-  // SIMPLIFIED: No complex WebRTC initialization needed
+  // Full WebRTC media initialization
   async initializeMedia() {
     try {
       console.log('🎤 Initializing media with timeout protection...');
@@ -338,7 +338,7 @@ class RTCManager {
       this.isAudioMuted = true;
       uiManager.updateVideoButton(this.isVideoMuted);
       uiManager.updateMuteButton(this.isAudioMuted);
-      NotificationManager.show('Using simplified mode without camera/microphone', 'warning');
+      NotificationManager.show('Using fallback mode without camera/microphone', 'warning');
       console.log('✅ Media initialized with dummy stream');
       return true;
     }
@@ -784,7 +784,7 @@ class RTCManager {
   }
 
   removePeer(socketId) {
-    console.log(`🧹 SIMPLIFIED: Removing user ${socketId}`);
+    console.log(`🧹 Removing user ${socketId}`);
     this.userInfo.delete(socketId);
     uiManager.removeVideo(socketId);
     console.log(`✅ Cleaned up user ${socketId}`);
@@ -801,9 +801,52 @@ class RTCManager {
     };
   }
 
-  // Stub method for compatibility
+  // Setup remote audio analysis for active speaker detection
   setupRemoteAudioAnalysis(socketId, stream) {
-    console.log(`🎵 SIMPLIFIED: Skipping remote audio analysis for ${socketId}`);
+    console.log(`🎵 Setting up remote audio analysis for ${socketId}`);
+    try {
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length > 0 && this.audioContext) {
+        const source = this.audioContext.createMediaStreamSource(stream);
+        const analyser = this.audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        source.connect(analyser);
+        
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        
+        const analyze = () => {
+          if (!this.peers.has(socketId)) return;
+          
+          requestAnimationFrame(analyze);
+          analyser.getByteFrequencyData(dataArray);
+          
+          let sum = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            sum += dataArray[i];
+          }
+          const average = sum / bufferLength;
+          
+          // Update remote user's audio visualizer
+          if (uiManager.updateRemoteAudioVisualizer) {
+            uiManager.updateRemoteAudioVisualizer(socketId, average, dataArray);
+          }
+          
+          // Detect active speaker
+          if (average > 30) {
+            this.activeSpeaker = socketId;
+            if (uiManager.setActiveSpeaker) {
+              uiManager.setActiveSpeaker(socketId);
+            }
+          }
+        };
+        
+        analyze();
+      }
+    } catch (error) {
+      console.error('Error setting up remote audio analysis:', error);
+    }
   }
 
   updateSettings(newSettings) {
@@ -1942,9 +1985,9 @@ class UIManager {
       ru: {
         nickname: 'Введите ваш никнейм',
         roomId: 'ID комнаты (оставьте пустым для новой комнаты)',
-        joinRoom: '� Вройти в комнату',
+        joinRoom: '🚀 Войти в комнату',
         beta: 'Бета 1.0',
-        telegram: '� ПЗрисоединиться к Telegram',
+        telegram: '📱 Присоединиться к Telegram',
         connecting: 'Злоер настраивает ваше соединение...',
         tip: '💡 Совет Злоера: Убедитесь, что микрофон готов!',
         roomCopied: 'Ссылка на комнату скопирована!',
@@ -2195,7 +2238,7 @@ class UIManager {
       copyRoomBtn.addEventListener('click', () => {
         const roomUrl = `${window.location.origin}${window.location.pathname}?room=${this.roomId}`;
         navigator.clipboard.writeText(roomUrl).then(() => {
-          NotificationManager.show('Room link copied to clipboard!', 'success');
+          NotificationManager.show(`🎮 ${this.t('roomCopied')}`, 'success');
         }).catch(() => {
           // Fallback for older browsers
           const textArea = document.createElement('textarea');
@@ -2204,7 +2247,7 @@ class UIManager {
           textArea.select();
           document.execCommand('copy');
           document.body.removeChild(textArea);
-          NotificationManager.show('Room link copied to clipboard!', 'success');
+          NotificationManager.show(`🎮 ${this.t('roomCopied')}`, 'success');
         });
       });
     }
@@ -2368,7 +2411,7 @@ class UIManager {
     // Show main app immediately
     setTimeout(() => {
       this.showMainApp();
-      NotificationManager.show('Skipped media setup - using simplified mode only', 'info');
+      NotificationManager.show('Skipped media setup - using fallback mode', 'info');
     }, 500);
   }
 
@@ -2476,7 +2519,7 @@ class UIManager {
     if (app) app.classList.remove('hidden');
     if (roomDisplay) roomDisplay.textContent = `Room: ${this.roomId}`;
     
-    // Show notification
+    // Show notification with proper translation
     setTimeout(() => {
       NotificationManager.show('🎮 Welcome to Zloer! Chat and see user presence.', 'success', 5000);
     }, 1000);
@@ -3479,10 +3522,10 @@ socketManager.connect = function() {
       NotificationManager.show(`🎮 ${uiManager.t('firstGamer')}`, 'info');
     }
     
-    // FIXED: Handle existing users as objects with socketId and nickname
+    // Handle existing users as objects with socketId and nickname
     data.users.forEach(user => {
       console.log('📞 Creating offer for:', user.socketId, 'nickname:', user.nickname);
-      // FIXED: Store user info before creating connection
+      // Store user info before creating connection
       rtcManager.storeUserInfo(user.socketId, { nickname: user.nickname });
       rtcManager.createOffer(user.socketId);
     });
@@ -3491,12 +3534,12 @@ socketManager.connect = function() {
   this.socket.on('user-joined', (data) => {
     console.log('👋 User joined:', data);
     
-    // FIXED: Update ICE servers configuration from server
+    // Update ICE servers configuration from server
     if (data.iceServers) {
       rtcManager.updateIceServers(data.iceServers);
     }
     
-    // FIXED: Store user info before any connection attempts
+    // Store user info before any connection attempts
     rtcManager.storeUserInfo(data.socketId, { nickname: data.nickname });
     
     uiManager.updateUserCount(uiManager.userCount + 1);
