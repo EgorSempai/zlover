@@ -317,13 +317,14 @@ class RTCManager {
       // Add local video to UI
       uiManager.addLocalVideo(this.localStream);
       
-      // Set initial states properly
-      this.isVideoMuted = false;
-      this.isAudioMuted = false;
+      // Set initial states - CAMERA OFF by default, audio on
+      this.isVideoMuted = true;  // Camera starts OFF
+      this.isAudioMuted = false; // Audio starts ON
       uiManager.updateVideoButton(this.isVideoMuted);
       uiManager.updateMuteButton(this.isAudioMuted);
+      uiManager.updateLocalVideoDisplay(this.isVideoMuted); // Show camera off overlay
       
-      console.log('✅ Media initialized successfully');
+      console.log('✅ Media initialized successfully - Camera OFF by default');
       return true;
       
     } catch (error) {
@@ -345,7 +346,7 @@ class RTCManager {
   }
 
   async requestMediaWithFallback() {
-    // ENHANCED: Try with high-quality audio and video settings
+    // Start with AUDIO ONLY - camera will be enabled manually by user
     try {
       const constraints = {
         audio: {
@@ -360,25 +361,16 @@ class RTCManager {
           deviceId: this.currentSettings.selectedMicrophone ? 
             { exact: this.currentSettings.selectedMicrophone } : undefined
         },
-        video: {
-          width: { ideal: 1280, max: 1920 },
-          height: { ideal: 720, max: 1080 },
-          frameRate: { ideal: this.currentSettings.videoFramerate, max: 60 },
-          deviceId: this.currentSettings.selectedCamera ? 
-            { exact: this.currentSettings.selectedCamera } : undefined,
-          // ENHANCED: Video quality settings
-          aspectRatio: { ideal: 16/9 },
-          facingMode: 'user'
-        }
+        video: false // Start with camera OFF - user will enable manually
       };
       
-      console.log('🎤 Requesting ENHANCED media with constraints:', constraints);
+      console.log('🎤 Requesting AUDIO ONLY (camera disabled by default):', constraints);
       return await navigator.mediaDevices.getUserMedia(constraints);
       
     } catch (error) {
-      console.log('🎤 Fallback: Trying high-quality audio only...');
+      console.log('🎤 Fallback: Trying basic audio only...');
       
-      // Try high-quality audio only
+      // Try basic audio only
       try {
         return await navigator.mediaDevices.getUserMedia({
           video: false,
@@ -393,7 +385,7 @@ class RTCManager {
           }
         });
       } catch (audioError) {
-        console.log('🎤 Fallback: Trying basic audio...');
+        console.log('🎤 Fallback: Trying most basic audio...');
         
         // Final fallback with basic audio
         try {
@@ -410,22 +402,22 @@ class RTCManager {
   }
 
   createDummyStream() {
-    // Create a canvas with a simple placeholder
+    // Create a canvas with a camera-off placeholder
     const canvas = document.createElement('canvas');
     canvas.width = 640;
     canvas.height = 480;
     const ctx = canvas.getContext('2d');
     
-    // Draw placeholder
+    // Draw camera-off placeholder
     ctx.fillStyle = '#2a2a2a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#fff';
     ctx.font = '24px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('NO CAMERA ACCESS', canvas.width/2, canvas.height/2 - 20);
+    ctx.fillText('📷 CAMERA OFF', canvas.width/2, canvas.height/2 - 20);
     ctx.font = '16px Arial';
     ctx.fillStyle = '#888';
-    ctx.fillText('Check permissions', canvas.width/2, canvas.height/2 + 20);
+    ctx.fillText('Click camera button to enable', canvas.width/2, canvas.height/2 + 20);
     
     return canvas.captureStream(1); // 1 FPS
   }
@@ -1490,9 +1482,26 @@ class RTCManager {
           localVideo.srcObject = this.localStream;
         }
         
-        // Update all peer connections
-        this.peers.forEach(async (pc) => {
-          pc.addTrack(newVideoTrack, this.localStream);
+        // Update all peer connections with the new video track
+        this.peers.forEach(async (pc, socketId) => {
+          try {
+            // Add the new video track to the peer connection
+            const sender = pc.addTrack(newVideoTrack, this.localStream);
+            
+            // Configure video encoding parameters
+            const params = sender.getParameters();
+            if (params.encodings && params.encodings.length > 0) {
+              params.encodings[0].maxBitrate = this.currentSettings.videoBitrate;
+              params.encodings[0].maxFramerate = this.currentSettings.videoFramerate;
+              params.encodings[0].priority = 'medium';
+              params.encodings[0].networkPriority = 'medium';
+            }
+            await sender.setParameters(params);
+            
+            console.log(`✅ Added video track to peer connection ${socketId}`);
+          } catch (error) {
+            console.error(`❌ Error adding video track to ${socketId}:`, error);
+          }
         });
         
         this.isVideoMuted = false;
