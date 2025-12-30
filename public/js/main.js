@@ -219,6 +219,8 @@ class RTCManager {
     this.localStream = null;
     this.remoteStreams = new Map(); // socketId -> MediaStream
     this.userInfo = new Map(); // socketId -> { nickname, isHost, etc. }
+    this.peers = new Map(); // socketId -> RTCPeerConnection (for compatibility)
+    this.pendingCandidates = new Map(); // socketId -> [candidates] (for compatibility)
     this.isAudioMuted = false;
     this.isVideoMuted = false;
     this.isScreenSharing = false;
@@ -227,6 +229,13 @@ class RTCManager {
     this.audioVisualizer = null;
     this.activeSpeaker = null;
     this.availableDevices = { audioInputs: [], videoInputs: [] };
+    
+    // ICE servers configuration (will be updated from server)
+    this.iceServers = [
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' }
+    ];
+    
     this.currentSettings = {
       audioCodec: 'opus',
       videoCodec: 'vp9',
@@ -535,6 +544,81 @@ class RTCManager {
     };
     
     visualize();
+  }
+
+  // Update ICE servers configuration from server
+  updateIceServers(iceServers) {
+    if (iceServers && Array.isArray(iceServers)) {
+      this.iceServers = iceServers;
+      console.log('🔄 Updated ICE servers configuration:', iceServers);
+      
+      // Log TURN server details for debugging
+      iceServers.forEach((server, index) => {
+        if (server.urls && (server.urls.includes('turn:') || server.urls.includes('turns:'))) {
+          console.log(`🔄 TURN Server ${index + 1}:`, {
+            url: server.urls,
+            username: server.username,
+            hasCredential: !!server.credential,
+            credentialLength: server.credential ? server.credential.length : 0
+          });
+        }
+      });
+    } else {
+      console.warn('⚠️ Invalid ICE servers received, keeping current configuration');
+    }
+  }
+
+  // SIMPLIFIED: No WebRTC peer connections needed
+  createOffer(socketId) {
+    console.log(`📞 SIMPLIFIED: Skipping WebRTC offer creation for ${socketId}`);
+    // In simplified mode, we just create placeholders
+    const userInfo = this.getStoredUserInfo(socketId);
+    if (userInfo) {
+      this.createRemoteUserPlaceholder(socketId, userInfo.nickname);
+    }
+  }
+
+  handleOffer(socketId, offer) {
+    console.log(`📥 SIMPLIFIED: Skipping WebRTC offer handling from ${socketId}`);
+  }
+
+  handleAnswer(socketId, answer) {
+    console.log(`📥 SIMPLIFIED: Skipping WebRTC answer handling from ${socketId}`);
+  }
+
+  handleIceCandidate(socketId, candidate) {
+    console.log(`🧊 SIMPLIFIED: Skipping ICE candidate handling from ${socketId}`);
+  }
+
+  removePeer(socketId) {
+    console.log(`🧹 SIMPLIFIED: Removing user ${socketId}`);
+    this.userInfo.delete(socketId);
+    uiManager.removeVideo(socketId);
+    console.log(`✅ Cleaned up user ${socketId}`);
+  }
+
+  // Get RTC configuration for WebRTC connections
+  getRTCConfiguration() {
+    return {
+      iceServers: this.iceServers,
+      iceTransportPolicy: 'all',
+      iceCandidatePoolSize: 2,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require'
+    };
+  }
+
+  // Stub method for compatibility
+  setupRemoteAudioAnalysis(socketId, stream) {
+    console.log(`🎵 SIMPLIFIED: Skipping remote audio analysis for ${socketId}`);
+  }
+
+  updateSettings(newSettings) {
+    this.currentSettings = { ...this.currentSettings, ...newSettings };
+    console.log('Settings updated:', this.currentSettings);
+    
+    // Save settings to localStorage
+    localStorage.setItem('zloer-settings', JSON.stringify(this.currentSettings));
   }
 
   createPeerConnection(socketId) {
