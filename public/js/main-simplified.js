@@ -332,37 +332,82 @@ class UIManager {
     const nicknameInput = document.getElementById('nickname-input');
     const roomInput = document.getElementById('room-input');
 
-    joinBtn.addEventListener('click', () => this.handleJoin());
+    if (joinBtn) joinBtn.addEventListener('click', () => this.handleJoin());
     
-    nicknameInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.handleJoin();
-    });
+    if (nicknameInput) {
+      nicknameInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') this.handleJoin();
+      });
+    }
     
-    roomInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.handleJoin();
-    });
+    if (roomInput) {
+      roomInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') this.handleJoin();
+      });
+    }
 
     // Control buttons
-    document.getElementById('mute-btn').addEventListener('click', () => {
-      mediaManager.toggleAudio();
-    });
+    const muteBtn = document.getElementById('mute-btn');
+    const videoBtn = document.getElementById('video-btn');
+    const chatSendBtn = document.getElementById('send-btn');
+    const chatInput = document.getElementById('chat-input');
 
-    document.getElementById('video-btn').addEventListener('click', () => {
-      mediaManager.toggleVideo();
-    });
+    if (muteBtn) {
+      muteBtn.addEventListener('click', () => {
+        mediaManager.toggleAudio();
+      });
+    }
 
-    document.getElementById('chat-send-btn').addEventListener('click', () => {
-      this.sendChatMessage();
-    });
+    if (videoBtn) {
+      videoBtn.addEventListener('click', () => {
+        mediaManager.toggleVideo();
+      });
+    }
 
-    document.getElementById('chat-input').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.sendChatMessage();
-    });
+    if (chatSendBtn) {
+      chatSendBtn.addEventListener('click', () => {
+        this.sendChatMessage();
+      });
+    }
+
+    if (chatInput) {
+      chatInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') this.sendChatMessage();
+      });
+    }
+
+    // Additional buttons that might exist
+    const leaveBtn = document.getElementById('leave-btn');
+    if (leaveBtn) {
+      leaveBtn.addEventListener('click', () => {
+        window.location.reload();
+      });
+    }
+
+    const copyRoomBtn = document.getElementById('copy-room-btn');
+    if (copyRoomBtn) {
+      copyRoomBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(this.roomId).then(() => {
+          NotificationManager.show('Room ID copied to clipboard!', 'success');
+        }).catch(() => {
+          NotificationManager.show('Failed to copy room ID', 'error');
+        });
+      });
+    }
   }
 
   async handleJoin() {
-    const nickname = document.getElementById('nickname-input').value.trim();
-    const roomId = document.getElementById('room-input').value.trim() || this.generateRoomId();
+    const nicknameInput = document.getElementById('nickname-input');
+    const roomInput = document.getElementById('room-input');
+    
+    if (!nicknameInput || !roomInput) {
+      console.error('❌ Required input elements not found');
+      NotificationManager.show('Page not loaded correctly. Please refresh.', 'error');
+      return;
+    }
+    
+    const nickname = nicknameInput.value.trim();
+    const roomId = roomInput.value.trim() || this.generateRoomId();
 
     if (!nickname) {
       NotificationManager.show('Please enter a nickname', 'error');
@@ -378,7 +423,10 @@ class UIManager {
     window.history.replaceState({}, '', roomUrl);
 
     // Show loading
-    document.getElementById('loading-screen').style.display = 'flex';
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen) {
+      loadingScreen.style.display = 'flex';
+    }
 
     try {
       // Initialize media
@@ -386,7 +434,7 @@ class UIManager {
       const mediaInitialized = await mediaManager.initializeMedia();
       if (!mediaInitialized) {
         console.error('Media initialization failed');
-        document.getElementById('loading-screen').style.display = 'none';
+        if (loadingScreen) loadingScreen.style.display = 'none';
         return;
       }
       console.log('Media initialized successfully');
@@ -404,17 +452,20 @@ class UIManager {
       // Show main app
       setTimeout(() => {
         console.log('Showing main app...');
-        document.getElementById('loading-screen').style.display = 'none';
-        document.getElementById('join-screen').style.display = 'none';
-        document.getElementById('app').classList.remove('hidden');
+        const joinScreen = document.getElementById('join-screen');
+        const app = document.getElementById('app');
+        
+        if (loadingScreen) loadingScreen.style.display = 'none';
+        if (joinScreen) joinScreen.style.display = 'none';
+        if (app) app.classList.remove('hidden');
         
         // Update UI
-        document.getElementById('room-id-display').textContent = `Room: ${roomId}`;
+        this.setRoomId(roomId);
       }, 2000);
 
     } catch (error) {
       console.error('Error during join process:', error);
-      document.getElementById('loading-screen').style.display = 'none';
+      if (loadingScreen) loadingScreen.style.display = 'none';
       NotificationManager.show('Failed to join room', 'error');
     }
   }
@@ -546,6 +597,14 @@ class UIManager {
     }
   }
 
+  setRoomId(roomId) {
+    this.roomId = roomId;
+    const roomIdElement = document.getElementById('room-id-display');
+    if (roomIdElement) {
+      roomIdElement.textContent = `Room: ${roomId}`;
+    }
+  }
+
   updateLayout() {
     const videoGrid = document.getElementById('video-grid');
     const containers = videoGrid.querySelectorAll('.video-container');
@@ -575,6 +634,8 @@ class UIManager {
 
   sendChatMessage() {
     const chatInput = document.getElementById('chat-input');
+    if (!chatInput) return;
+    
     const message = chatInput.value.trim();
     
     if (message) {
@@ -690,19 +751,41 @@ document.addEventListener('DOMContentLoaded', () => {
   console.log('🚀 Zloer Communication - SIMPLIFIED MODE');
   console.log('📝 WebRTC P2P disabled - using placeholders only');
   
+  // Check if required elements exist
+  const requiredElements = [
+    'join-btn', 'nickname-input', 'room-input', 
+    'loading-screen', 'join-screen', 'app'
+  ];
+  
+  const missingElements = requiredElements.filter(id => !document.getElementById(id));
+  
+  if (missingElements.length > 0) {
+    console.error('❌ Missing required HTML elements:', missingElements);
+    alert('Page not loaded correctly. Please refresh the page.');
+    return;
+  }
+  
   // Show simplified mode notification
   setTimeout(() => {
     NotificationManager.show('🔧 Running in SIMPLIFIED mode - WebRTC P2P disabled. You can see nicknames and chat, but no real video/audio streaming.', 'info', 10000);
   }, 2000);
   
-  uiManager.initialize();
-  setupSocketEvents();
-  
-  // Check for room ID in URL
-  const urlParams = new URLSearchParams(window.location.search);
-  const roomId = urlParams.get('room');
-  if (roomId) {
-    document.getElementById('room-input').value = roomId;
+  try {
+    uiManager.initialize();
+    setupSocketEvents();
+    
+    // Check for room ID in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomId = urlParams.get('room');
+    if (roomId) {
+      const roomInput = document.getElementById('room-input');
+      if (roomInput) {
+        roomInput.value = roomId;
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error initializing application:', error);
+    NotificationManager.show('Failed to initialize application. Please refresh the page.', 'error');
   }
 });
 
