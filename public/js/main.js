@@ -213,14 +213,11 @@ class SocketManager {
   }
 }
 
-// RTC Manager Class
+// SIMPLIFIED: Server-Relayed Media Manager (No P2P WebRTC)
 class RTCManager {
   constructor() {
     this.localStream = null;
-    this.peers = new Map(); // socketId -> RTCPeerConnection
-    // FIXED: Added ICE candidate queue to handle race conditions
-    this.pendingCandidates = new Map(); // socketId -> [candidates]
-    // FIXED: Store user information for nickname handling
+    this.remoteStreams = new Map(); // socketId -> MediaStream
     this.userInfo = new Map(); // socketId -> { nickname, isHost, etc. }
     this.isAudioMuted = false;
     this.isVideoMuted = false;
@@ -249,614 +246,64 @@ class RTCManager {
       audioVisualizerEnabled: true
     };
     
-    // Dynamic ICE servers configuration - will be updated from server
-    this.iceServers = [
-      // Fallback STUN servers (will be replaced by server config)
-      {
-        urls: 'stun:stun.l.google.com:19302'
-      }
-    ];
-    
-    // Enhanced diagnostics and monitoring
-    this.connectionStats = new Map(); // socketId -> stats
-    this.connectionErrors = [];
-    this.iceConnectionStates = new Map();
-    this.lastStatsUpdate = 0;
-    this.statsInterval = null;
-    
-    // Start connection monitoring
-    this.startConnectionMonitoring();
+    console.log('🚀 RTCManager initialized in SERVER-RELAY mode (No P2P)');
   }
 
-  // FIXED: Methods to store and retrieve user information
+  // SIMPLIFIED: Store and retrieve user information
   storeUserInfo(socketId, userInfo) {
     this.userInfo.set(socketId, userInfo);
     console.log(`📝 Stored user info for ${socketId}:`, userInfo);
+    
+    // SIMPLIFIED: Immediately create placeholder for remote user
+    if (socketId !== 'local') {
+      this.createRemoteUserPlaceholder(socketId, userInfo.nickname);
+    }
   }
 
   getStoredUserInfo(socketId) {
     return this.userInfo.get(socketId);
   }
 
-  // FIXED: Add missing updateIceServers method
-  updateIceServers(iceServers) {
-    if (iceServers && Array.isArray(iceServers)) {
-      this.iceServers = iceServers;
-      console.log('🔄 Updated ICE servers configuration:', iceServers);
-      
-      // Log TURN server details for debugging
-      iceServers.forEach((server, index) => {
-        if (server.urls.includes('turn:') || server.urls.includes('turns:')) {
-          console.log(`🔄 TURN Server ${index + 1}:`, {
-            url: server.urls,
-            username: server.username,
-            hasCredential: !!server.credential,
-            credentialLength: server.credential ? server.credential.length : 0
-          });
-        }
-      });
-    } else {
-      console.warn('⚠️ Invalid ICE servers received, keeping current configuration');
-    }
-  }
-
-  // FIXED: Optimized TURN connectivity test with fewer servers
-  async testTurnConnectivity() {
-    console.log('🧪 Testing TURN server connectivity (optimized)...');
+  // SIMPLIFIED: Create placeholder for remote user (no WebRTC)
+  createRemoteUserPlaceholder(socketId, nickname) {
+    console.log(`👤 Creating placeholder for remote user: ${socketId} (${nickname})`);
     
-    // Use only essential servers for testing
-    const testConfig = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        {
-          urls: 'turn:openrelay.metered.ca:80',
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        }
-      ],
-      iceCandidatePoolSize: 2 // Minimal for testing
-    };
+    // Create a simple placeholder stream (black video + silence)
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.font = '24px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${nickname}`, canvas.width/2, canvas.height/2 - 20);
+    ctx.fillText('(Camera Off)', canvas.width/2, canvas.height/2 + 20);
     
-    const testPc = new RTCPeerConnection(testConfig);
+    const stream = canvas.captureStream(1); // 1 FPS
     
-    return new Promise((resolve) => {
-      let hasRelayCandidate = false;
-      let timeout;
-      
-      testPc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log(`🧊 Test ICE candidate:`, {
-            type: event.candidate.type,
-            protocol: event.candidate.protocol
-          });
-          
-          if (event.candidate.type === 'relay') {
-            hasRelayCandidate = true;
-            console.log('✅ TURN relay candidate found - TURN servers are working!');
-          }
-        } else {
-          // ICE gathering complete
-          clearTimeout(timeout);
-          if (hasRelayCandidate) {
-            console.log('✅ TURN connectivity test passed');
-            resolve(true);
-          } else {
-            console.warn('⚠️ No TURN relay candidates found - TURN servers may not be working');
-            resolve(false);
-          }
-          testPc.close();
-        }
-      };
-      
-      // Create a data channel to trigger ICE gathering
-      testPc.createDataChannel('test');
-      
-      // Create offer to start ICE gathering
-      testPc.createOffer().then(offer => {
-        return testPc.setLocalDescription(offer);
-      }).catch(error => {
-        console.error('❌ Error creating test offer:', error);
-        resolve(false);
-      });
-      
-      // Shorter timeout for faster testing
-      timeout = setTimeout(() => {
-        console.warn('⚠️ TURN connectivity test timed out');
-        testPc.close();
-        resolve(false);
-      }, 5000); // Reduced from 10s to 5s
-    });
-  }
-
-  // Update ICE servers configuration from server
-  updateIceServers(iceServers) {
-    this.iceServers = iceServers;
-    console.log('🔄 Updated ICE servers configuration:', iceServers);
+    // Add to UI immediately
+    uiManager.addRemoteVideo(socketId, stream);
     
-    // Log TURN server details for debugging
-    iceServers.forEach((server, index) => {
-      if (server.urls.includes('turn:') || server.urls.includes('turns:')) {
-        console.log(`🔄 TURN Server ${index + 1}:`, {
-          url: server.urls,
-          username: server.username,
-          hasCredential: !!server.credential,
-          credentialLength: server.credential ? server.credential.length : 0
-        });
-        
-        // Test TURN server connectivity
-        this.testTurnServer(server);
-      }
-    });
+    // Update nickname
+    setTimeout(() => {
+      uiManager.updateUserName(socketId, nickname);
+    }, 100);
   }
 
-  // Test TURN server connectivity
-  async testTurnServer(turnConfig) {
-    try {
-      console.log('🧪 Testing TURN server connectivity for:', turnConfig.urls);
-      
-      // Create a test peer connection with only this TURN server
-      const testConfig = {
-        iceServers: [turnConfig],
-        iceTransportPolicy: 'relay' // Force TURN usage
-      };
-      
-      const testPc = new RTCPeerConnection(testConfig);
-      
-      // Add a dummy data channel to trigger ICE gathering
-      testPc.createDataChannel('test');
-      
-      // Monitor ICE gathering
-      testPc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('🧊 ICE candidate type:', event.candidate.type, 'for', turnConfig.urls);
-          if (event.candidate.type === 'relay') {
-            console.log('✅ TURN relay candidate found - TURN server is working!');
-          }
-        } else {
-          console.log('🏁 ICE gathering complete for', turnConfig.urls);
-        }
-      };
-      
-      testPc.onicegatheringstatechange = () => {
-        console.log('🔄 ICE gathering state:', testPc.iceGatheringState, 'for', turnConfig.urls);
-      };
-      
-      // Create offer to start ICE gathering
-      const offer = await testPc.createOffer();
-      await testPc.setLocalDescription(offer);
-      
-      // Clean up after 10 seconds
-      setTimeout(() => {
-        testPc.close();
-      }, 10000);
-      
-    } catch (error) {
-      console.error('❌ TURN server test failed for', turnConfig.urls, ':', error);
-    }
-  }
-
-  // Get current RTC configuration with optimized ICE servers
-  getRTCConfiguration() {
-    // FIXED: Using verified configuration from the working project (Zloer Main)
-    const iceServers = [
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-      {
-        urls: 'turn:185.117.154.193:3478',
-        username: 'nearsnap',
-        credential: 'nearsnap123'
-      },
-      {
-        urls: 'turns:185.117.154.193:5349',
-        username: 'nearsnap',
-        credential: 'nearsnap123'
-      }
-    ];
-
-    console.log('🔗 Using FIXED ICE servers configuration:', iceServers);
-    
-    return {
-      iceServers: iceServers,
-      iceTransportPolicy: 'all',
-      iceCandidatePoolSize: 2,
-      bundlePolicy: 'max-bundle',
-      rtcpMuxPolicy: 'require'
-    };
-  }
-  startConnectionMonitoring() {
-    // Monitor connection stats every 5 seconds
-    this.statsInterval = setInterval(() => {
-      this.updateConnectionStats();
-    }, 5000);
-
-    // Monitor ICE connection states and verify TURN usage
-    setInterval(() => {
-      this.monitorIceStates();
-      this.verifyTurnUsage();
-    }, 2000);
-  }
-
-  // Verify that connections are using TURN relay
-  async verifyTurnUsage() {
-    for (const [socketId, peer] of this.peers) {
-      if (peer.connectionState === 'connected') {
-        try {
-          const stats = await peer.getStats();
-          stats.forEach(report => {
-            if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-              const localType = report.localCandidate ? report.localCandidate.candidateType : 'unknown';
-              const remoteType = report.remoteCandidate ? report.remoteCandidate.candidateType : 'unknown';
-              
-              if (localType === 'relay' || remoteType === 'relay') {
-                console.log(`✅ Using TURN Relay for ${socketId} (Secure Connection)`);
-              } else {
-                console.log(`⚡ Direct Connection (P2P) for ${socketId} - Best Performance`);
-              }
-            }
-          });
-        } catch (error) {
-          // Ignore stats errors
-        }
-      }
-    }
-  }
-
-  async updateConnectionStats() {
-    try {
-      const allStats = {};
-      let totalBitrate = 0;
-      let totalPacketLoss = 0;
-      let totalRTT = 0;
-      let peerCount = 0;
-
-      for (const [socketId, peer] of this.peers) {
-        if (peer.connectionState === 'connected') {
-          const stats = await peer.getStats();
-          const peerStats = this.parseWebRTCStats(stats);
-          
-          allStats[socketId] = peerStats;
-          totalBitrate += peerStats.bitrate || 0;
-          totalPacketLoss += peerStats.packetLoss || 0;
-          totalRTT += peerStats.rtt || 0;
-          peerCount++;
-        }
-      }
-
-      // Calculate averages
-      const avgStats = {
-        avgBitrate: peerCount > 0 ? totalBitrate / peerCount : 0,
-        avgPacketLoss: peerCount > 0 ? totalPacketLoss / peerCount : 0,
-        avgRTT: peerCount > 0 ? totalRTT / peerCount : 0,
-        peersCount: peerCount,
-        timestamp: Date.now()
-      };
-
-      this.connectionStats.set('average', avgStats);
-      
-      // Send stats to server for monitoring
-      if (socketManager && socketManager.isConnected) {
-        socketManager.emit('webrtc-stats', avgStats);
-      }
-
-      // Log poor connection quality
-      if (avgStats.avgPacketLoss > 5 || avgStats.avgRTT > 500) {
-        console.warn('⚠️ Poor WebRTC connection quality detected:', avgStats);
-        this.handlePoorConnectionQuality(avgStats);
-      }
-
-    } catch (error) {
-      console.error('Error updating connection stats:', error);
-    }
-  }
-
-  parseWebRTCStats(stats) {
-    let bitrate = 0;
-    let packetLoss = 0;
-    let rtt = 0;
-    let bytesReceived = 0;
-    let bytesSent = 0;
-
-    stats.forEach(report => {
-      if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
-        bitrate += report.bytesReceived * 8 / 1000; // Convert to kbps
-        bytesReceived += report.bytesReceived || 0;
-        packetLoss += report.packetsLost || 0;
-      }
-      
-      if (report.type === 'outbound-rtp' && report.mediaType === 'video') {
-        bytesSent += report.bytesSent || 0;
-      }
-      
-      if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-        rtt = report.currentRoundTripTime * 1000 || 0; // Convert to ms
-      }
-    });
-
-    return { bitrate, packetLoss, rtt, bytesReceived, bytesSent };
-  }
-
-  monitorIceStates() {
-    for (const [socketId, peer] of this.peers) {
-      const currentState = peer.iceConnectionState;
-      const previousState = this.iceConnectionStates.get(socketId);
-      
-      if (currentState !== previousState) {
-        console.log(`🧊 ICE connection state changed for ${socketId}: ${previousState} → ${currentState}`);
-        this.iceConnectionStates.set(socketId, currentState);
-        
-        // Handle connection state changes
-        this.handleIceStateChange(socketId, currentState, previousState);
-      }
-    }
-  }
-
-  handleIceStateChange(socketId, newState, oldState) {
-    switch (newState) {
-      case 'connected':
-        console.log(`✅ WebRTC connection established with ${socketId}`);
-        NotificationManager.show('Peer connected', 'success');
-        // Verify TURN usage
-        this.logConnectionType(socketId);
-        break;
-      case 'disconnected':
-        console.warn(`⚠️ WebRTC connection lost with ${socketId}`);
-        NotificationManager.show('Peer connection lost', 'warning');
-        break;
-      case 'failed':
-        console.error(`❌ WebRTC connection failed with ${socketId}`);
-        console.error('ICE connection failed - check TURN server configuration');
-        NotificationManager.show('Connection failed - check TURN server', 'error');
-        this.handleConnectionFailure(socketId);
-        break;
-      case 'closed':
-        console.log(`🔒 WebRTC connection closed with ${socketId}`);
-        break;
-    }
-  }
-
-  // FIXED: Added connection failure handling with ICE restart
-  handleConnectionFailure(socketId) {
-    const pc = this.peers.get(socketId);
-    if (pc) {
-      console.log(`🔄 Attempting ICE restart for ${socketId}`);
-      
-      try {
-        // Attempt ICE restart
-        pc.restartIce();
-        
-        // Log the failure for diagnostics
-        this.connectionErrors.push({
-          socketId,
-          error: 'ICE connection failed',
-          timestamp: Date.now(),
-          iceState: pc.iceConnectionState,
-          connectionState: pc.connectionState
-        });
-        
-        // If ICE restart doesn't work after 30 seconds, remove peer
-        setTimeout(() => {
-          if (pc.connectionState === 'failed') {
-            console.error(`❌ ICE restart failed for ${socketId}, removing peer`);
-            this.removePeer(socketId);
-          }
-        }, 30000);
-        
-      } catch (error) {
-        console.error(`❌ ICE restart failed for ${socketId}:`, error);
-        this.removePeer(socketId);
-      }
-    }
-  }
-
-  // FIXED: Added method to process pending ICE candidates
-  async processPendingCandidates(socketId) {
-    const pc = this.peers.get(socketId);
-    const pendingCandidates = this.pendingCandidates.get(socketId) || [];
-    
-    if (pc && pc.remoteDescription && pendingCandidates.length > 0) {
-      console.log(`🔄 Processing ${pendingCandidates.length} pending ICE candidates for ${socketId}`);
-      
-      for (const candidate of pendingCandidates) {
-        try {
-          await pc.addIceCandidate(candidate);
-          console.log(`✅ Added queued ICE candidate for ${socketId}`);
-        } catch (error) {
-          console.error(`❌ Error adding queued ICE candidate for ${socketId}:`, error);
-        }
-      }
-      
-      // Clear the queue
-      this.pendingCandidates.set(socketId, []);
-    }
-  }
-
-  // Log connection type for debugging
-  async logConnectionType(socketId) {
-    const peer = this.peers.get(socketId);
-    if (!peer) return;
-
-    try {
-      const stats = await peer.getStats();
-      stats.forEach(report => {
-        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-          console.log(`🔗 Connection type for ${socketId}:`, {
-            local: report.localCandidate?.candidateType,
-            remote: report.remoteCandidate?.candidateType,
-            transport: report.localCandidate?.protocol
-          });
-        }
-      });
-    } catch (error) {
-      console.error('Error getting connection stats:', error);
-    }
-  }
-
-  handleConnectionFailure(socketId) {
-    // Attempt to restart ICE
-    const peer = this.peers.get(socketId);
-    if (peer) {
-      console.log(`🔄 Attempting ICE restart for ${socketId}`);
-      peer.restartIce();
-      
-      // Log the failure for diagnostics
-      this.connectionErrors.push({
-        socketId,
-        error: 'ICE connection failed',
-        timestamp: Date.now(),
-        iceState: peer.iceConnectionState,
-        connectionState: peer.connectionState
-      });
-    }
-  }
-
-  handlePoorConnectionQuality(stats) {
-    // Could implement adaptive bitrate or quality reduction
-    console.log('🔧 Implementing quality adjustments for poor connection');
-    
-    // Reduce video bitrate if packet loss is high
-    if (stats.avgPacketLoss > 10) {
-      this.currentSettings.videoBitrate = Math.max(500000, this.currentSettings.videoBitrate * 0.7);
-      console.log(`📉 Reduced video bitrate to ${this.currentSettings.videoBitrate}`);
-    }
-  }
-
-  getConnectionStats() {
-    return {
-      peers: this.peers.size,
-      connectionStates: Array.from(this.iceConnectionStates.entries()),
-      averageStats: this.connectionStats.get('average'),
-      recentErrors: this.connectionErrors.slice(-5), // Last 5 errors
-      timestamp: Date.now()
-    };
-  }
-
-  // Enhanced error handling for WebRTC operations
-  async handleWebRTCEsrror(error, operation, socketId = null) {
-    const errorInfo = {
-      operation,
-      socketId,
-      error: error.message,
-      name: error.name,
-      timestamp: Date.now()
-    };
-    
-    this.connectionErrors.push(errorInfo);
-    console.error(`WebRTC Error in ${operation}:`, error);
-    
-    // Specific error handling
-    switch (error.name) {
-      case 'NotAllowedError':
-        NotificationManager.show('Camera/microphone access denied', 'error');
-        break;
-      case 'NotFoundError':
-        NotificationManager.show('Camera/microphone not found', 'error');
-        break;
-      case 'OverconstrainedError':
-        NotificationManager.show('Camera/microphone constraints not supported', 'error');
-        break;
-      case 'NotReadableError':
-        NotificationManager.show('Camera/microphone already in use', 'error');
-        break;
-      default:
-        NotificationManager.show(`WebRTC error: ${error.message}`, 'error');
-    }
-    
-    return errorInfo;
-  }
-
-  async enumerateDevices() {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      
-      this.availableDevices.audioInputs = devices.filter(device => device.kind === 'audioinput');
-      this.availableDevices.videoInputs = devices.filter(device => device.kind === 'videoinput');
-      
-      console.log('Available devices:', this.availableDevices);
-      return this.availableDevices;
-    } catch (error) {
-      console.error('Error enumerating devices:', error);
-      return { audioInputs: [], videoInputs: [] };
-    }
-  }
-
-  // High-quality audio constraints (camera off by default)
-  getMediaConstraints() {
-    const [width, height] = this.currentSettings.videoResolution.split('x').map(Number);
-    
-    return {
-      audio: {
-        deviceId: this.currentSettings.selectedMicrophone ? 
-          { exact: this.currentSettings.selectedMicrophone } : undefined,
-        echoCancellation: this.currentSettings.echoCancellation,
-        noiseSuppression: this.currentSettings.noiseSuppression,
-        autoGainControl: this.currentSettings.autoGainControl,
-        sampleRate: this.currentSettings.sampleRate,
-        channelCount: this.currentSettings.audioChannels,
-        volume: 1.0,
-        latency: 0.01
-      },
-      video: {
-        deviceId: this.currentSettings.selectedCamera ?
-          { exact: this.currentSettings.selectedCamera } : undefined,
-        width: { ideal: width, max: 1920 },
-        height: { ideal: height, max: 1080 },
-        frameRate: { ideal: 30, max: 30 }
-      }
-    };
-  }
-
-  updateSettings(newSettings) {
-    this.currentSettings = { ...this.currentSettings, ...newSettings };
-    console.log('Settings updated:', this.currentSettings);
-    
-    // Save settings to localStorage
-    localStorage.setItem('zloer-settings', JSON.stringify(this.currentSettings));
-  }
-
-  loadSettings() {
-    try {
-      const savedSettings = localStorage.getItem('zloer-settings');
-      if (savedSettings) {
-        this.currentSettings = { ...this.currentSettings, ...JSON.parse(savedSettings) };
-        console.log('Settings loaded:', this.currentSettings);
-      }
-    } catch (error) {
-      console.error('Error loading settings:', error);
-    }
-  }
-
-  resetSettings() {
-    this.currentSettings = {
-      audioCodec: 'opus',
-      videoCodec: 'vp9',
-      audioBitrate: 128000,
-      videoBitrate: 2000000,
-      audioChannels: 2,
-      sampleRate: 48000,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-      stereoEnabled: true,
-      dtxEnabled: false,
-      selectedMicrophone: '',
-      selectedCamera: '',
-      videoResolution: '1280x720',
-      videoFramerate: 30,
-      audioVisualizerEnabled: true
-    };
-    
-    localStorage.removeItem('zloer-settings');
-    console.log('Settings reset to default');
-  }
+  // SIMPLIFIED: No complex WebRTC initialization needed
   async initializeMedia() {
     try {
+      console.log('🎤 Initializing media (SIMPLIFIED mode)...');
+      
       // Load saved settings
       this.loadSettings();
       
       // Enumerate devices first
       await this.enumerateDevices();
       
-      // FIXED: Start with both audio AND video enabled by default
+      // Request media with both audio and video
       const constraints = {
         audio: {
           echoCancellation: true,
@@ -881,24 +328,19 @@ class RTCManager {
       // Add local video to UI
       uiManager.addLocalVideo(this.localStream);
       
-      // FIXED: Set initial states properly
+      // Set initial states properly
       this.isVideoMuted = false;
       this.isAudioMuted = false;
       uiManager.updateVideoButton(this.isVideoMuted);
       uiManager.updateMuteButton(this.isAudioMuted);
       
-      console.log('✅ Media initialized successfully with audio and video');
-      
-      // FIXED: Test TURN connectivity after media initialization
-      setTimeout(() => {
-        this.testTurnConnectivity();
-      }, 2000);
-      
+      console.log('✅ Media initialized successfully (SIMPLIFIED mode)');
       return true;
+      
     } catch (error) {
       console.error('Error accessing media devices:', error);
       
-      // FIXED: Try with audio only as fallback
+      // Try with audio only as fallback
       try {
         console.log('🎤 Fallback: Trying audio only...');
         this.localStream = await navigator.mediaDevices.getUserMedia({
@@ -927,96 +369,17 @@ class RTCManager {
     }
   }
 
+  // SIMPLIFIED: No complex device switching needed
   async switchDevice(deviceType, deviceId) {
-    try {
-      if (deviceType === 'microphone') {
-        this.currentSettings.selectedMicrophone = deviceId;
-      } else if (deviceType === 'camera') {
-        this.currentSettings.selectedCamera = deviceId;
-      }
-
-      // Stop current stream
-      if (this.localStream) {
-        this.localStream.getTracks().forEach(track => track.stop());
-      }
-
-      // Get new stream with updated device
-      const constraints = this.getMediaConstraints();
-      this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-      // Update local video
-      const localVideo = document.getElementById('local-video');
-      if (localVideo) {
-        localVideo.srcObject = this.localStream;
-      }
-
-      // Reinitialize audio visualizer
-      await this.initializeAudioVisualizer();
-
-      // Update all peer connections with new stream
-      this.peers.forEach(async (pc) => {
-        const senders = pc.getSenders();
-        const tracks = this.localStream.getTracks();
-
-        for (const track of tracks) {
-          const sender = senders.find(s => s.track && s.track.kind === track.kind);
-          if (sender) {
-            await sender.replaceTrack(track);
-          } else {
-            pc.addTrack(track, this.localStream);
-          }
-        }
-      });
-
-      NotificationManager.show(`${deviceType} switched successfully`, 'success');
-      return true;
-    } catch (error) {
-      console.error(`Error switching ${deviceType}:`, error);
-      NotificationManager.show(`Failed to switch ${deviceType}`, 'error');
-      return false;
-    }
+    console.log(`🔄 Device switching disabled in SIMPLIFIED mode`);
+    NotificationManager.show('Device switching not available in simplified mode', 'info');
+    return false;
   }
 
+  // SIMPLIFIED: No device testing needed
   async testDevice(deviceType, deviceId) {
-    try {
-      const constraints = deviceType === 'microphone' ? 
-        { audio: { deviceId: { exact: deviceId } } } :
-        { video: { deviceId: { exact: deviceId } } };
-
-      const testStream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      // Create test video element
-      const testVideo = document.createElement('video');
-      testVideo.srcObject = testStream;
-      testVideo.autoplay = true;
-      testVideo.muted = true;
-      testVideo.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        width: 200px;
-        height: 150px;
-        border: 2px solid var(--primary-color);
-        border-radius: 8px;
-        z-index: 10000;
-        background: #000;
-      `;
-
-      document.body.appendChild(testVideo);
-
-      // Remove test video after 5 seconds
-      setTimeout(() => {
-        testStream.getTracks().forEach(track => track.stop());
-        document.body.removeChild(testVideo);
-      }, 5000);
-
-      NotificationManager.show(`Testing ${deviceType} for 5 seconds`, 'info');
-      return true;
-    } catch (error) {
-      console.error(`Error testing ${deviceType}:`, error);
-      NotificationManager.show(`Failed to test ${deviceType}`, 'error');
-      return false;
-    }
+    console.log(`🧪 Device testing disabled in SIMPLIFIED mode`);
+    return false;
   }
 
   async initializeAudioVisualizer() {
