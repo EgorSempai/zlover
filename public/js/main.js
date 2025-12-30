@@ -1038,6 +1038,17 @@ class RTCManager {
   }
 
   muteAudio() {
+    if (this.localStream) {
+      const audioTrack = this.localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = false;
+        this.isAudioMuted = true;
+        uiManager.updateMuteButton(this.isAudioMuted);
+      }
+    }
+  }
+
+  createPeerConnection(socketId) {
     const config = this.getRTCConfiguration();
     const pc = new RTCPeerConnection(config);
     
