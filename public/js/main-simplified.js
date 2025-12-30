@@ -132,22 +132,13 @@ class MediaManager {
     try {
       console.log('🎤 Initializing media (SIMPLIFIED mode)...');
       
-      // Request media with both audio and video
-      const constraints = {
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        },
-        video: {
-          width: { ideal: 1280, max: 1920 },
-          height: { ideal: 720, max: 1080 },
-          frameRate: { ideal: 30, max: 30 }
-        }
-      };
+      // Add timeout to prevent hanging
+      const mediaPromise = this.requestMedia();
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Media access timeout')), 10000);
+      });
       
-      console.log('🎤 Requesting media with constraints:', constraints);
-      this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.localStream = await Promise.race([mediaPromise, timeoutPromise]);
       
       // Add local video to UI
       uiManager.addLocalVideo(this.localStream);
@@ -164,10 +155,46 @@ class MediaManager {
     } catch (error) {
       console.error('Error accessing media devices:', error);
       
-      // Try with audio only as fallback
+      // Create a dummy stream for simplified mode
+      console.log('🎤 Creating dummy stream for simplified mode...');
+      this.localStream = this.createDummyStream();
+      
+      uiManager.addLocalVideo(this.localStream);
+      this.isVideoMuted = true;
+      this.isAudioMuted = true;
+      uiManager.updateVideoButton(this.isVideoMuted);
+      uiManager.updateMuteButton(this.isAudioMuted);
+      NotificationManager.show('Using simplified mode without camera/microphone', 'info');
+      console.log('✅ Media initialized with dummy stream');
+      return true;
+    }
+  }
+
+  async requestMedia() {
+    // Try with both audio and video first
+    try {
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: {
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 30 }
+        }
+      };
+      
+      console.log('🎤 Requesting media with constraints:', constraints);
+      return await navigator.mediaDevices.getUserMedia(constraints);
+      
+    } catch (error) {
+      console.log('🎤 Fallback: Trying audio only...');
+      
+      // Try audio only
       try {
-        console.log('🎤 Fallback: Trying audio only...');
-        this.localStream = await navigator.mediaDevices.getUserMedia({
+        return await navigator.mediaDevices.getUserMedia({
           video: false,
           audio: {
             echoCancellation: true,
@@ -175,21 +202,32 @@ class MediaManager {
             autoGainControl: true
           }
         });
-        
-        uiManager.addLocalVideo(this.localStream);
-        this.isVideoMuted = true;
-        this.isAudioMuted = false;
-        uiManager.updateVideoButton(this.isVideoMuted);
-        uiManager.updateMuteButton(this.isAudioMuted);
-        NotificationManager.show('Camera not available, using audio only', 'warning');
-        console.log('✅ Media initialized with audio only');
-        return true;
-      } catch (basicError) {
-        console.error('Error accessing audio:', basicError);
-        NotificationManager.show('No microphone access. Please check permissions.', 'error');
-        return false;
+      } catch (audioError) {
+        console.log('🎤 No media access, will use dummy stream');
+        throw audioError;
       }
     }
+  }
+
+  createDummyStream() {
+    // Create a canvas with a simple placeholder
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    
+    // Draw placeholder
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.font = '24px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('SIMPLIFIED MODE', canvas.width/2, canvas.height/2 - 20);
+    ctx.font = '16px Arial';
+    ctx.fillStyle = '#888';
+    ctx.fillText('No Camera Access', canvas.width/2, canvas.height/2 + 20);
+    
+    return canvas.captureStream(1); // 1 FPS
   }
 
   // Simple stubs for WebRTC methods (no actual P2P)
@@ -394,6 +432,33 @@ class UIManager {
         });
       });
     }
+
+    // Skip loading button
+    const skipLoadingBtn = document.getElementById('skip-loading-btn');
+    if (skipLoadingBtn) {
+      skipLoadingBtn.addEventListener('click', () => {
+        console.log('User clicked skip loading');
+        this.skipLoading();
+      });
+    }
+  }
+
+  skipLoading() {
+    console.log('Skipping loading process...');
+    
+    // Create dummy stream
+    mediaManager.localStream = mediaManager.createDummyStream();
+    mediaManager.isVideoMuted = true;
+    mediaManager.isAudioMuted = true;
+    
+    // Connect to server
+    socketManager.connect();
+    
+    // Show main app immediately
+    setTimeout(() => {
+      this.showMainApp();
+      NotificationManager.show('Skipped media setup - using simplified mode only', 'info');
+    }, 500);
   }
 
   async handleJoin() {
@@ -429,45 +494,71 @@ class UIManager {
     }
 
     try {
-      // Initialize media
-      console.log('Initializing media...');
-      const mediaInitialized = await mediaManager.initializeMedia();
-      if (!mediaInitialized) {
-        console.error('Media initialization failed');
-        if (loadingScreen) loadingScreen.style.display = 'none';
-        return;
-      }
-      console.log('Media initialized successfully');
-
-      // Connect to server
-      console.log('Connecting to server...');
-      socketManager.connect();
+      // Add overall timeout for the entire process
+      const joinProcess = this.performJoinProcess();
+      const timeoutProcess = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Join process timeout')), 15000);
+      });
       
-      // Wait for connection and join room
-      setTimeout(() => {
-        console.log('Joining room...', { roomId, nickname });
-        socketManager.emit('join-room', { roomId, nickname });
-      }, 1000);
-
-      // Show main app
-      setTimeout(() => {
-        console.log('Showing main app...');
-        const joinScreen = document.getElementById('join-screen');
-        const app = document.getElementById('app');
-        
-        if (loadingScreen) loadingScreen.style.display = 'none';
-        if (joinScreen) joinScreen.style.display = 'none';
-        if (app) app.classList.remove('hidden');
-        
-        // Update UI
-        this.setRoomId(roomId);
-      }, 2000);
-
+      await Promise.race([joinProcess, timeoutProcess]);
+      
     } catch (error) {
       console.error('Error during join process:', error);
       if (loadingScreen) loadingScreen.style.display = 'none';
-      NotificationManager.show('Failed to join room', 'error');
+      
+      if (error.message === 'Join process timeout') {
+        NotificationManager.show('Connection timeout. Continuing in simplified mode...', 'warning');
+        // Continue anyway in simplified mode
+        this.showMainApp();
+      } else {
+        NotificationManager.show('Failed to join room', 'error');
+      }
     }
+  }
+
+  async performJoinProcess() {
+    // Initialize media
+    console.log('Initializing media...');
+    const mediaInitialized = await mediaManager.initializeMedia();
+    if (!mediaInitialized) {
+      console.error('Media initialization failed');
+      throw new Error('Media initialization failed');
+    }
+    console.log('Media initialized successfully');
+
+    // Connect to server
+    console.log('Connecting to server...');
+    socketManager.connect();
+    
+    // Wait for connection and join room
+    setTimeout(() => {
+      console.log('Joining room...', { roomId: this.roomId, nickname: this.nickname });
+      socketManager.emit('join-room', { roomId: this.roomId, nickname: this.nickname });
+    }, 1000);
+
+    // Show main app after a delay
+    setTimeout(() => {
+      this.showMainApp();
+    }, 3000);
+  }
+
+  showMainApp() {
+    console.log('Showing main app...');
+    const loadingScreen = document.getElementById('loading-screen');
+    const joinScreen = document.getElementById('join-screen');
+    const app = document.getElementById('app');
+    
+    if (loadingScreen) loadingScreen.style.display = 'none';
+    if (joinScreen) joinScreen.style.display = 'none';
+    if (app) app.classList.remove('hidden');
+    
+    // Update UI
+    this.setRoomId(this.roomId);
+    
+    // Show simplified mode notification
+    setTimeout(() => {
+      NotificationManager.show('🔧 Running in SIMPLIFIED mode - Basic functionality only', 'info', 8000);
+    }, 1000);
   }
 
   generateRoomId() {
@@ -765,11 +856,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
   
-  // Show simplified mode notification
-  setTimeout(() => {
-    NotificationManager.show('🔧 Running in SIMPLIFIED mode - WebRTC P2P disabled. You can see nicknames and chat, but no real video/audio streaming.', 'info', 10000);
-  }, 2000);
-  
   try {
     uiManager.initialize();
     setupSocketEvents();
@@ -783,6 +869,8 @@ document.addEventListener('DOMContentLoaded', () => {
         roomInput.value = roomId;
       }
     }
+    
+    console.log('✅ Application initialized successfully');
   } catch (error) {
     console.error('❌ Error initializing application:', error);
     NotificationManager.show('Failed to initialize application. Please refresh the page.', 'error');
