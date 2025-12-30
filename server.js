@@ -2,7 +2,6 @@ const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 // FIXED: Removed unused uuidv4 import
-const crypto = require('crypto');
 const path = require('path');
 
 const app = express();
@@ -20,51 +19,23 @@ const io = new Server(server, {
 
 // TURN Server Configuration
 const TURN_SERVER_IP = process.env.TURN_SERVER_IP || '185.117.154.193';
-const TURN_SECRET = process.env.TURN_SECRET || 'my_secure_secret_key_2024';
 
-// Generate dynamic TURN credentials
+// FIXED: Use static credentials matching the working configuration
 function getIceServers() {
-  const timestamp = Math.floor(Date.now() / 1000) + 86400; // 24 hours from now
-  const username = `${timestamp}:zloer-user`;
-  
-  // Create HMAC-SHA1 signature
-  const hmac = crypto.createHmac('sha1', TURN_SECRET);
-  hmac.update(username);
-  const password = hmac.digest('base64');
-  
-  console.log('🔄 Generated TURN credentials:', {
-    username,
-    // FIXED: Don't expose password in logs for security
-    passwordLength: password.length,
-    server: TURN_SERVER_IP,
-    timestamp: new Date(timestamp * 1000).toISOString()
-  });
+  console.log('🔄 Sending static TURN credentials (nearsnap)');
   
   return [
-    // Google STUN servers
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
     {
-      urls: 'stun:stun.l.google.com:19302'
+      urls: 'turn:185.117.154.193:3478',
+      username: 'nearsnap',
+      credential: 'nearsnap123'
     },
     {
-      urls: 'stun:stun1.l.google.com:19302'
-    },
-    // TURN server over UDP
-    {
-      urls: `turn:${TURN_SERVER_IP}:3478?transport=udp`,
-      username: username,
-      credential: password
-    },
-    // TURN server over TCP
-    {
-      urls: `turn:${TURN_SERVER_IP}:3478?transport=tcp`,
-      username: username,
-      credential: password
-    },
-    // TURN server over TLS (port 5349 standard)
-    {
-      urls: `turns:${TURN_SERVER_IP}:5349?transport=tcp`,
-      username: username,
-      credential: password
+      urls: 'turns:185.117.154.193:5349',
+      username: 'nearsnap',
+      credential: 'nearsnap123'
     }
   ];
 }
@@ -224,7 +195,7 @@ app.get('/health', (req, res) => { // FIXED: Added req parameter back for consis
       platform: process.platform,
       turnServer: {
         ip: TURN_SERVER_IP,
-        hasSecret: !!TURN_SECRET
+        hasSecret: true // Using static credentials
       }
     };
     
@@ -812,8 +783,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🌐 Domain: ${process.env.DOMAIN || 'localhost'}`);
   console.log(`🔄 TURN Server: ${TURN_SERVER_IP}`);
-  // FIXED: Don't log if secret exists for security, just log status
-  console.log(`🔐 TURN Secret: ${TURN_SECRET ? 'Configured ✅' : 'Not configured ❌'}`);
+  // FIXED: Using static credentials
+  console.log(`🔐 TURN Credentials: Static (nearsnap) ✅`);
   if (process.env.NODE_ENV === 'production') {
     console.log(`🔒 Production mode with enhanced security`);
   }
