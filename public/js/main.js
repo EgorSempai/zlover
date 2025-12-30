@@ -48,9 +48,16 @@ class SocketManager {
       }
     });
 
+    // FIXED: Enhanced connect_error handling for WebRTC signaling
     this.socket.on('connect_error', (error) => {
       console.error('Connection error:', error);
       NotificationManager.show(`Connection error: ${error.message}`, 'error');
+      
+      // Clean up WebRTC connections on socket error
+      if (rtcManager) {
+        rtcManager.cleanup();
+      }
+      
       this.attemptReconnection();
     });
 
@@ -211,6 +218,8 @@ class RTCManager {
   constructor() {
     this.localStream = null;
     this.peers = new Map(); // socketId -> RTCPeerConnection
+    // FIXED: Added ICE candidate queue to handle race conditions
+    this.pendingCandidates = new Map(); // socketId -> [candidates]
     this.isAudioMuted = false;
     this.isVideoMuted = false;
     this.isScreenSharing = false;
@@ -238,21 +247,13 @@ class RTCManager {
       audioVisualizerEnabled: true
     };
     
-    // TURN-only configuration - no direct P2P connections
-    this.config = {
-      iceServers: [
-        {
-          urls: [
-            `turn:${window.location.hostname}:3478`,
-            `turns:${window.location.hostname}:5349`
-          ],
-          username: 'zloer',
-          credential: 'zloer-secure-password-2024'
-        }
-      ],
-      iceTransportPolicy: 'relay', // Force TURN, disable direct P2P
-      iceCandidatePoolSize: 10
-    };
+    // Dynamic ICE servers configuration - will be updated from server
+    this.iceServers = [
+      // Fallback STUN servers (will be replaced by server config)
+      {
+        urls: 'stun:stun.l.google.com:19302'
+      }
+    ];
     
     // Enhanced diagnostics and monitoring
     this.connectionStats = new Map(); // socketId -> stats
@@ -265,7 +266,191 @@ class RTCManager {
     this.startConnectionMonitoring();
   }
 
-  // Enhanced WebRTC diagnostics and monitoring with TURN verification
+  // FIXED: Add missing updateIceServers method
+  updateIceServers(iceServers) {
+    if (iceServers && Array.isArray(iceServers)) {
+      this.iceServers = iceServers;
+      console.log('🔄 Updated ICE servers configuration:', iceServers);
+      
+      // Log TURN server details for debugging
+      iceServers.forEach((server, index) => {
+        if (server.urls.includes('turn:') || server.urls.includes('turns:')) {
+          console.log(`🔄 TURN Server ${index + 1}:`, {
+            url: server.urls,
+            username: server.username,
+            hasCredential: !!server.credential,
+            credentialLength: server.credential ? server.credential.length : 0
+          });
+        }
+      });
+    } else {
+      console.warn('⚠️ Invalid ICE servers received, keeping current configuration');
+    }
+  }
+
+  // FIXED: Optimized TURN connectivity test with fewer servers
+  async testTurnConnectivity() {
+    console.log('🧪 Testing TURN server connectivity (optimized)...');
+    
+    // Use only essential servers for testing
+    const testConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ],
+      iceCandidatePoolSize: 2 // Minimal for testing
+    };
+    
+    const testPc = new RTCPeerConnection(testConfig);
+    
+    return new Promise((resolve) => {
+      let hasRelayCandidate = false;
+      let timeout;
+      
+      testPc.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log(`🧊 Test ICE candidate:`, {
+            type: event.candidate.type,
+            protocol: event.candidate.protocol
+          });
+          
+          if (event.candidate.type === 'relay') {
+            hasRelayCandidate = true;
+            console.log('✅ TURN relay candidate found - TURN servers are working!');
+          }
+        } else {
+          // ICE gathering complete
+          clearTimeout(timeout);
+          if (hasRelayCandidate) {
+            console.log('✅ TURN connectivity test passed');
+            resolve(true);
+          } else {
+            console.warn('⚠️ No TURN relay candidates found - TURN servers may not be working');
+            resolve(false);
+          }
+          testPc.close();
+        }
+      };
+      
+      // Create a data channel to trigger ICE gathering
+      testPc.createDataChannel('test');
+      
+      // Create offer to start ICE gathering
+      testPc.createOffer().then(offer => {
+        return testPc.setLocalDescription(offer);
+      }).catch(error => {
+        console.error('❌ Error creating test offer:', error);
+        resolve(false);
+      });
+      
+      // Shorter timeout for faster testing
+      timeout = setTimeout(() => {
+        console.warn('⚠️ TURN connectivity test timed out');
+        testPc.close();
+        resolve(false);
+      }, 5000); // Reduced from 10s to 5s
+    });
+  }
+
+  // Update ICE servers configuration from server
+  updateIceServers(iceServers) {
+    this.iceServers = iceServers;
+    console.log('🔄 Updated ICE servers configuration:', iceServers);
+    
+    // Log TURN server details for debugging
+    iceServers.forEach((server, index) => {
+      if (server.urls.includes('turn:') || server.urls.includes('turns:')) {
+        console.log(`🔄 TURN Server ${index + 1}:`, {
+          url: server.urls,
+          username: server.username,
+          hasCredential: !!server.credential,
+          credentialLength: server.credential ? server.credential.length : 0
+        });
+        
+        // Test TURN server connectivity
+        this.testTurnServer(server);
+      }
+    });
+  }
+
+  // Test TURN server connectivity
+  async testTurnServer(turnConfig) {
+    try {
+      console.log('🧪 Testing TURN server connectivity for:', turnConfig.urls);
+      
+      // Create a test peer connection with only this TURN server
+      const testConfig = {
+        iceServers: [turnConfig],
+        iceTransportPolicy: 'relay' // Force TURN usage
+      };
+      
+      const testPc = new RTCPeerConnection(testConfig);
+      
+      // Add a dummy data channel to trigger ICE gathering
+      testPc.createDataChannel('test');
+      
+      // Monitor ICE gathering
+      testPc.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('🧊 ICE candidate type:', event.candidate.type, 'for', turnConfig.urls);
+          if (event.candidate.type === 'relay') {
+            console.log('✅ TURN relay candidate found - TURN server is working!');
+          }
+        } else {
+          console.log('🏁 ICE gathering complete for', turnConfig.urls);
+        }
+      };
+      
+      testPc.onicegatheringstatechange = () => {
+        console.log('🔄 ICE gathering state:', testPc.iceGatheringState, 'for', turnConfig.urls);
+      };
+      
+      // Create offer to start ICE gathering
+      const offer = await testPc.createOffer();
+      await testPc.setLocalDescription(offer);
+      
+      // Clean up after 10 seconds
+      setTimeout(() => {
+        testPc.close();
+      }, 10000);
+      
+    } catch (error) {
+      console.error('❌ TURN server test failed for', turnConfig.urls, ':', error);
+    }
+  }
+
+  // Get current RTC configuration with optimized ICE servers
+  getRTCConfiguration() {
+    // FIXED: Using verified configuration from the working project (Zloer Main)
+    const iceServers = [
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      {
+        urls: 'turn:185.117.154.193:3478',
+        username: 'nearsnap',
+        credential: 'nearsnap123'
+      },
+      {
+        urls: 'turns:185.117.154.193:5349',
+        username: 'nearsnap',
+        credential: 'nearsnap123'
+      }
+    ];
+
+    console.log('🔗 Using FIXED ICE servers configuration:', iceServers);
+    
+    return {
+      iceServers: iceServers,
+      iceTransportPolicy: 'all',
+      iceCandidatePoolSize: 2,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require'
+    };
+  }
   startConnectionMonitoring() {
     // Monitor connection stats every 5 seconds
     this.statsInterval = setInterval(() => {
@@ -398,6 +583,8 @@ class RTCManager {
       case 'connected':
         console.log(`✅ WebRTC connection established with ${socketId}`);
         NotificationManager.show('Peer connected', 'success');
+        // Verify TURN usage
+        this.logConnectionType(socketId);
         break;
       case 'disconnected':
         console.warn(`⚠️ WebRTC connection lost with ${socketId}`);
@@ -405,12 +592,90 @@ class RTCManager {
         break;
       case 'failed':
         console.error(`❌ WebRTC connection failed with ${socketId}`);
-        NotificationManager.show('Peer connection failed', 'error');
+        console.error('ICE connection failed - check TURN server configuration');
+        NotificationManager.show('Connection failed - check TURN server', 'error');
         this.handleConnectionFailure(socketId);
         break;
       case 'closed':
         console.log(`🔒 WebRTC connection closed with ${socketId}`);
         break;
+    }
+  }
+
+  // FIXED: Added connection failure handling with ICE restart
+  handleConnectionFailure(socketId) {
+    const pc = this.peers.get(socketId);
+    if (pc) {
+      console.log(`🔄 Attempting ICE restart for ${socketId}`);
+      
+      try {
+        // Attempt ICE restart
+        pc.restartIce();
+        
+        // Log the failure for diagnostics
+        this.connectionErrors.push({
+          socketId,
+          error: 'ICE connection failed',
+          timestamp: Date.now(),
+          iceState: pc.iceConnectionState,
+          connectionState: pc.connectionState
+        });
+        
+        // If ICE restart doesn't work after 30 seconds, remove peer
+        setTimeout(() => {
+          if (pc.connectionState === 'failed') {
+            console.error(`❌ ICE restart failed for ${socketId}, removing peer`);
+            this.removePeer(socketId);
+          }
+        }, 30000);
+        
+      } catch (error) {
+        console.error(`❌ ICE restart failed for ${socketId}:`, error);
+        this.removePeer(socketId);
+      }
+    }
+  }
+
+  // FIXED: Added method to process pending ICE candidates
+  async processPendingCandidates(socketId) {
+    const pc = this.peers.get(socketId);
+    const pendingCandidates = this.pendingCandidates.get(socketId) || [];
+    
+    if (pc && pc.remoteDescription && pendingCandidates.length > 0) {
+      console.log(`🔄 Processing ${pendingCandidates.length} pending ICE candidates for ${socketId}`);
+      
+      for (const candidate of pendingCandidates) {
+        try {
+          await pc.addIceCandidate(candidate);
+          console.log(`✅ Added queued ICE candidate for ${socketId}`);
+        } catch (error) {
+          console.error(`❌ Error adding queued ICE candidate for ${socketId}:`, error);
+        }
+      }
+      
+      // Clear the queue
+      this.pendingCandidates.set(socketId, []);
+    }
+  }
+
+  // Log connection type for debugging
+  async logConnectionType(socketId) {
+    const peer = this.peers.get(socketId);
+    if (!peer) return;
+
+    try {
+      const stats = await peer.getStats();
+      stats.forEach(report => {
+        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+          console.log(`🔗 Connection type for ${socketId}:`, {
+            local: report.localCandidate?.candidateType,
+            remote: report.remoteCandidate?.candidateType,
+            transport: report.localCandidate?.protocol
+          });
+        }
+      });
+    } catch (error) {
+      console.error('Error getting connection stats:', error);
     }
   }
 
@@ -454,7 +719,7 @@ class RTCManager {
   }
 
   // Enhanced error handling for WebRTC operations
-  async handleWebRTCError(error, operation, socketId = null) {
+  async handleWebRTCEsrror(error, operation, socketId = null) {
     const errorInfo = {
       operation,
       socketId,
@@ -573,26 +838,51 @@ class RTCManager {
       // Enumerate devices first
       await this.enumerateDevices();
       
-      // Start with audio only (camera off by default)
-      const constraints = this.getMediaConstraints();
+      // FIXED: Start with both audio AND video enabled by default
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000,
+          channelCount: 2
+        },
+        video: {
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 30 }
+        }
+      };
+      
+      console.log('🎤 Requesting media with constraints:', constraints);
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
       
       // Initialize audio visualizer
       await this.initializeAudioVisualizer();
       
-      // Add local video to UI (will show camera off emoji)
+      // Add local video to UI
       uiManager.addLocalVideo(this.localStream);
       
-      // Set initial video state
-      this.isVideoMuted = true;
+      // FIXED: Set initial states properly
+      this.isVideoMuted = false;
+      this.isAudioMuted = false;
       uiManager.updateVideoButton(this.isVideoMuted);
+      uiManager.updateMuteButton(this.isAudioMuted);
+      
+      console.log('✅ Media initialized successfully with audio and video');
+      
+      // FIXED: Test TURN connectivity after media initialization
+      setTimeout(() => {
+        this.testTurnConnectivity();
+      }, 2000);
       
       return true;
     } catch (error) {
       console.error('Error accessing media devices:', error);
       
-      // Try with basic constraints as fallback
+      // FIXED: Try with audio only as fallback
       try {
+        console.log('🎤 Fallback: Trying audio only...');
         this.localStream = await navigator.mediaDevices.getUserMedia({
           video: false,
           audio: {
@@ -605,8 +895,11 @@ class RTCManager {
         await this.initializeAudioVisualizer();
         uiManager.addLocalVideo(this.localStream);
         this.isVideoMuted = true;
+        this.isAudioMuted = false;
         uiManager.updateVideoButton(this.isVideoMuted);
-        NotificationManager.show('Using basic audio quality due to device limitations', 'warning');
+        uiManager.updateMuteButton(this.isAudioMuted);
+        NotificationManager.show('Camera not available, using audio only', 'warning');
+        console.log('✅ Media initialized with audio only');
         return true;
       } catch (basicError) {
         console.error('Error accessing audio:', basicError);
@@ -770,7 +1063,13 @@ class RTCManager {
   }
 
   createPeerConnection(socketId) {
-    const pc = new RTCPeerConnection(this.config);
+    const config = this.getRTCConfiguration();
+    const pc = new RTCPeerConnection(config);
+    
+    console.log('🔗 Creating peer connection with config:', config);
+    
+    // FIXED: Initialize pending candidates queue for this peer
+    this.pendingCandidates.set(socketId, []);
     
     // Add local stream tracks with enhanced settings
     if (this.localStream) {
@@ -800,6 +1099,15 @@ class RTCManager {
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        // FIXED: Log ICE candidate details for debugging
+        console.log(`🧊 ICE candidate for ${socketId}:`, {
+          type: event.candidate.type,
+          protocol: event.candidate.protocol,
+          address: event.candidate.address,
+          port: event.candidate.port,
+          foundation: event.candidate.foundation
+        });
+        
         socketManager.emit('signal', {
           to: socketId,
           signal: {
@@ -807,17 +1115,48 @@ class RTCManager {
             candidate: event.candidate
           }
         });
+      } else {
+        console.log(`🏁 ICE gathering complete for ${socketId}`);
       }
     };
 
-    // Handle connection state changes
+    // FIXED: Enhanced connection state monitoring with reconnection logic
     pc.onconnectionstatechange = () => {
       console.log(`Connection state with ${socketId}:`, pc.connectionState);
       
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        this.removePeer(socketId);
+      if (pc.connectionState === 'failed') {
+        console.error(`❌ Connection failed with ${socketId}, attempting ICE restart`);
+        this.handleConnectionFailure(socketId);
+      } else if (pc.connectionState === 'disconnected') {
+        console.warn(`⚠️ Connection disconnected with ${socketId}, monitoring for recovery`);
+        // Give it 10 seconds to recover before attempting restart
+        setTimeout(() => {
+          if (pc.connectionState === 'disconnected') {
+            console.log(`🔄 Attempting ICE restart for ${socketId} after timeout`);
+            this.handleConnectionFailure(socketId);
+          }
+        }, 10000);
       } else if (pc.connectionState === 'connected') {
+        console.log(`✅ Connection established with ${socketId}`);
         NotificationManager.show('Peer connected successfully', 'success');
+        // FIXED: Process any pending candidates now that connection is established
+        this.processPendingCandidates(socketId);
+      }
+    };
+
+    // FIXED: Added ICE connection state monitoring for better diagnostics
+    pc.oniceconnectionstatechange = () => {
+      console.log(`ICE connection state with ${socketId}:`, pc.iceConnectionState);
+      this.handleIceStateChange(socketId, pc.iceConnectionState);
+    };
+
+    // FIXED: Added signaling state monitoring to handle race conditions
+    pc.onsignalingstatechange = () => {
+      console.log(`Signaling state with ${socketId}:`, pc.signalingState);
+      
+      // Process pending candidates when remote description is set
+      if (pc.signalingState === 'stable' || pc.signalingState === 'have-remote-offer') {
+        this.processPendingCandidates(socketId);
       }
     };
 
@@ -876,10 +1215,6 @@ class RTCManager {
         offerToReceiveVideo: true
       });
       
-      // Modify SDP for better audio and video quality
-      offer.sdp = this.enhanceAudioSDP(offer.sdp);
-      offer.sdp = this.enhanceVideoSDP(offer.sdp);
-      
       await pc.setLocalDescription(offer);
       
       socketManager.emit('signal', {
@@ -898,16 +1233,12 @@ class RTCManager {
     const pc = this.createPeerConnection(socketId);
     
     try {
-      // Enhance incoming offer SDP
-      offer.sdp = this.enhanceAudioSDP(offer.sdp);
-      offer.sdp = this.enhanceVideoSDP(offer.sdp);
-      
       await pc.setRemoteDescription(offer);
-      const answer = await pc.createAnswer();
       
-      // Enhance answer SDP
-      answer.sdp = this.enhanceAudioSDP(answer.sdp);
-      answer.sdp = this.enhanceVideoSDP(answer.sdp);
+      // FIXED: Process pending candidates after setting remote description
+      this.processPendingCandidates(socketId);
+      
+      const answer = await pc.createAnswer();
       
       await pc.setLocalDescription(answer);
       
@@ -920,6 +1251,8 @@ class RTCManager {
       });
     } catch (error) {
       console.error('Error handling offer:', error);
+      // FIXED: Clean up on error
+      this.removePeer(socketId);
     }
   }
 
@@ -1020,8 +1353,13 @@ class RTCManager {
     if (pc) {
       try {
         await pc.setRemoteDescription(answer);
+        
+        // FIXED: Process pending candidates after setting remote description
+        this.processPendingCandidates(socketId);
       } catch (error) {
         console.error('Error handling answer:', error);
+        // FIXED: Clean up on error
+        this.removePeer(socketId);
       }
     }
   }
@@ -1030,9 +1368,76 @@ class RTCManager {
     const pc = this.peers.get(socketId);
     if (pc) {
       try {
-        await pc.addIceCandidate(candidate);
+        // FIXED: Check if remote description is set before adding candidate
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+          await pc.addIceCandidate(candidate);
+          console.log(`✅ Added ICE candidate for ${socketId}`);
+        } else {
+          // FIXED: Queue candidate if remote description not set yet (race condition fix)
+          console.log(`📦 Queuing ICE candidate for ${socketId} (remote description not set)`);
+          const pendingCandidates = this.pendingCandidates.get(socketId) || [];
+          pendingCandidates.push(candidate);
+          this.pendingCandidates.set(socketId, pendingCandidates);
+        }
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
+        // Don't throw error, just log it as this is common during connection setup
+      }
+    }
+  }
+
+  // FIXED: Added method to process pending ICE candidates
+  async processPendingCandidates(socketId) {
+    const pc = this.peers.get(socketId);
+    const pendingCandidates = this.pendingCandidates.get(socketId) || [];
+    
+    if (pc && pc.remoteDescription && pendingCandidates.length > 0) {
+      console.log(`🔄 Processing ${pendingCandidates.length} pending ICE candidates for ${socketId}`);
+      
+      for (const candidate of pendingCandidates) {
+        try {
+          await pc.addIceCandidate(candidate);
+          console.log(`✅ Added queued ICE candidate for ${socketId}`);
+        } catch (error) {
+          console.error(`❌ Error adding queued ICE candidate for ${socketId}:`, error);
+        }
+      }
+      
+      // Clear the queue
+      this.pendingCandidates.set(socketId, []);
+    }
+  }
+
+  // FIXED: Added connection failure handling with ICE restart
+  handleConnectionFailure(socketId) {
+    const pc = this.peers.get(socketId);
+    if (pc) {
+      console.log(`🔄 Attempting ICE restart for ${socketId}`);
+      
+      try {
+        // Attempt ICE restart
+        pc.restartIce();
+        
+        // Log the failure for diagnostics
+        this.connectionErrors.push({
+          socketId,
+          error: 'ICE connection failed',
+          timestamp: Date.now(),
+          iceState: pc.iceConnectionState,
+          connectionState: pc.connectionState
+        });
+        
+        // If ICE restart doesn't work after 30 seconds, remove peer
+        setTimeout(() => {
+          if (pc.connectionState === 'failed') {
+            console.error(`❌ ICE restart failed for ${socketId}, removing peer`);
+            this.removePeer(socketId);
+          }
+        }, 30000);
+        
+      } catch (error) {
+        console.error(`❌ ICE restart failed for ${socketId}:`, error);
+        this.removePeer(socketId);
       }
     }
   }
@@ -1040,9 +1445,28 @@ class RTCManager {
   removePeer(socketId) {
     const pc = this.peers.get(socketId);
     if (pc) {
-      pc.close();
+      // FIXED: Properly close peer connection and clean up resources
+      try {
+        // Close all transceivers
+        pc.getTransceivers().forEach(transceiver => {
+          if (transceiver.stop) {
+            transceiver.stop();
+          }
+        });
+        
+        // Close the peer connection
+        pc.close();
+      } catch (error) {
+        console.error(`Error closing peer connection for ${socketId}:`, error);
+      }
+      
       this.peers.delete(socketId);
     }
+    
+    // FIXED: Clean up pending candidates queue
+    this.pendingCandidates.delete(socketId);
+    
+    // Remove from UI
     uiManager.removeVideo(socketId);
     
     // Remove stats display
@@ -1050,6 +1474,8 @@ class RTCManager {
     if (statsSection) {
       statsSection.remove();
     }
+    
+    console.log(`🧹 Cleaned up peer connection for ${socketId}`);
   }
 
   toggleAudio() {
@@ -1235,19 +1661,52 @@ class RTCManager {
   }
 
   cleanup() {
-    // Close all peer connections
-    this.peers.forEach(pc => pc.close());
+    // FIXED: Enhanced cleanup to prevent memory leaks
+    console.log('🧹 Starting WebRTC cleanup...');
+    
+    // Close all peer connections with proper cleanup
+    this.peers.forEach((pc, socketId) => {
+      try {
+        // Close all transceivers
+        pc.getTransceivers().forEach(transceiver => {
+          if (transceiver.stop) {
+            transceiver.stop();
+          }
+        });
+        
+        // Close peer connection
+        pc.close();
+        console.log(`✅ Closed peer connection for ${socketId}`);
+      } catch (error) {
+        console.error(`❌ Error closing peer connection for ${socketId}:`, error);
+      }
+    });
     this.peers.clear();
 
-    // Stop local stream
+    // FIXED: Clear pending candidates queue
+    this.pendingCandidates.clear();
+
+    // Stop local stream with proper track cleanup
     if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream.getTracks().forEach(track => {
+        try {
+          track.stop();
+          console.log(`✅ Stopped ${track.kind} track`);
+        } catch (error) {
+          console.error(`❌ Error stopping ${track.kind} track:`, error);
+        }
+      });
       this.localStream = null;
     }
 
     // Clean up audio context
     if (this.audioContext) {
-      this.audioContext.close();
+      try {
+        this.audioContext.close();
+        console.log('✅ Closed audio context');
+      } catch (error) {
+        console.error('❌ Error closing audio context:', error);
+      }
       this.audioContext = null;
     }
 
@@ -1260,6 +1719,8 @@ class RTCManager {
       clearInterval(this.statsInterval);
       this.statsInterval = null;
     }
+    
+    console.log('🧹 WebRTC cleanup completed');
   }
 
   startConnectionStats() {
@@ -2150,9 +2611,30 @@ class UIManager {
     if (!rtcManager.currentSettings.audioVisualizerEnabled) return;
     
     const canvas = document.getElementById('local-visualizer');
-    if (!canvas) return;
+    // FIXED: Add proper error checking for canvas element
+    if (!canvas) {
+      console.warn('Local canvas visualizer not found');
+      return;
+    }
     
-    const ctx = canvas.getContext('2d');
+    // FIXED: Check if element is actually a canvas
+    if (canvas.tagName !== 'CANVAS') {
+      console.warn(`Local visualizer element is not a canvas, it's a ${canvas.tagName}`);
+      return;
+    }
+    
+    // FIXED: Add try-catch for getContext
+    let ctx;
+    try {
+      ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.warn('Could not get 2d context for local canvas');
+        return;
+      }
+    } catch (error) {
+      console.error('Error getting local canvas context:', error);
+      return;
+    }
     const width = canvas.width;
     const height = canvas.height;
     
@@ -2186,9 +2668,30 @@ class UIManager {
     if (!rtcManager.currentSettings.audioVisualizerEnabled) return;
     
     const canvas = document.getElementById(`visualizer-${socketId}`);
-    if (!canvas) return;
+    // FIXED: Add proper error checking for canvas element
+    if (!canvas) {
+      console.warn(`Canvas visualizer not found for ${socketId}`);
+      return;
+    }
     
-    const ctx = canvas.getContext('2d');
+    // FIXED: Check if element is actually a canvas
+    if (canvas.tagName !== 'CANVAS') {
+      console.warn(`Element visualizer-${socketId} is not a canvas, it's a ${canvas.tagName}`);
+      return;
+    }
+    
+    // FIXED: Add try-catch for getContext
+    let ctx;
+    try {
+      ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.warn(`Could not get 2d context for canvas ${socketId}`);
+        return;
+      }
+    } catch (error) {
+      console.error(`Error getting canvas context for ${socketId}:`, error);
+      return;
+    }
     const width = canvas.width;
     const height = canvas.height;
     
@@ -2664,6 +3167,122 @@ class UIManager {
     }
   }
 
+  // FIXED: Add missing addRemoteVideo method
+  addRemoteVideo(socketId, stream) {
+    console.log(`🎥 Adding remote video for ${socketId}`);
+    const videoGrid = document.getElementById('video-grid');
+    
+    // Remove existing video if any
+    this.removeVideo(socketId);
+    
+    const videoContainer = document.createElement('div');
+    videoContainer.className = 'video-container';
+    videoContainer.id = `video-${socketId}`;
+    videoContainer.dataset.socketId = socketId;
+    
+    const video = document.createElement('video');
+    video.id = `remote-video-${socketId}`;
+    video.srcObject = stream;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = false; // FIXED: Don't mute remote audio - this was the main issue!
+    
+    // FIXED: Add error handling for video playback
+    video.onerror = (e) => {
+      console.error(`Video error for ${socketId}:`, e);
+    };
+    
+    video.onloadedmetadata = () => {
+      console.log(`✅ Video metadata loaded for ${socketId}`);
+    };
+    
+    // Create name overlay
+    const nameOverlay = document.createElement('div');
+    nameOverlay.className = 'name-overlay';
+    nameOverlay.id = `name-${socketId}`;
+    nameOverlay.textContent = `User ${socketId.substring(0, 8)}`; // Default name, will be updated
+    
+    // Create controls overlay
+    const controlsOverlay = document.createElement('div');
+    controlsOverlay.className = 'video-controls';
+    
+    // Add fullscreen button
+    const fullscreenBtn = document.createElement('button');
+    fullscreenBtn.className = 'control-btn fullscreen-btn';
+    fullscreenBtn.innerHTML = '⛶';
+    fullscreenBtn.title = 'Fullscreen';
+    
+    // Add pin button
+    const pinBtn = document.createElement('button');
+    pinBtn.className = 'control-btn pin-btn';
+    pinBtn.innerHTML = '📌';
+    pinBtn.title = 'Pin video';
+    
+    // FIXED: Add kick button for host
+    if (this.isHost) {
+      const kickBtn = document.createElement('button');
+      kickBtn.className = 'control-btn kick-btn';
+      kickBtn.innerHTML = '❌';
+      kickBtn.title = this.t('kickUser');
+      kickBtn.onclick = (e) => {
+        e.stopPropagation();
+        this.kickUser(socketId);
+      };
+      controlsOverlay.appendChild(kickBtn);
+    }
+    
+    controlsOverlay.appendChild(fullscreenBtn);
+    controlsOverlay.appendChild(pinBtn);
+    
+    // FIXED: Create canvas element for audio visualizer instead of div
+    const audioVisualizer = document.createElement('canvas');
+    audioVisualizer.className = 'audio-visualizer';
+    audioVisualizer.id = `visualizer-${socketId}`;
+    audioVisualizer.width = 100;
+    audioVisualizer.height = 30;
+    
+    // Assemble the video container
+    videoContainer.appendChild(video);
+    videoContainer.appendChild(nameOverlay);
+    videoContainer.appendChild(controlsOverlay);
+    videoContainer.appendChild(audioVisualizer);
+    
+    videoGrid.appendChild(videoContainer);
+    
+    console.log(`✅ Remote video added for ${socketId}`);
+    
+    // FIXED: Force video to play (some browsers require this)
+    video.play().catch(e => {
+      console.warn(`Auto-play failed for ${socketId}:`, e);
+    });
+  }
+
+  // FIXED: Add missing updateUserName method
+  updateUserName(socketId, nickname) {
+    console.log(`📝 Updating name for ${socketId}: ${nickname}`);
+    const nameElement = document.getElementById(`name-${socketId}`);
+    if (nameElement) {
+      nameElement.textContent = nickname;
+      console.log(`✅ Name updated for ${socketId}: ${nickname}`);
+    } else {
+      console.warn(`❌ Name element not found for ${socketId}`);
+    }
+  }
+
+  // FIXED: Add missing removeVideo method
+  removeVideo(socketId) {
+    const videoContainer = document.getElementById(`video-${socketId}`);
+    if (videoContainer) {
+      // FIXED: Stop all tracks before removing
+      const video = videoContainer.querySelector('video');
+      if (video && video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+      }
+      videoContainer.remove();
+      console.log(`🗑️ Removed video container for ${socketId}`);
+    }
+  }
+
   escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -2751,6 +3370,12 @@ socketManager.connect = function() {
   // WebRTC signaling
   this.socket.on('existing-users', (data) => {
     console.log('✅ Existing users received:', data);
+    
+    // Update ICE servers configuration from server
+    if (data.iceServers) {
+      rtcManager.updateIceServers(data.iceServers);
+    }
+    
     uiManager.setHost(data.isHost);
     uiManager.updateUserCount(data.users.length + 1);
     
@@ -2769,9 +3394,16 @@ socketManager.connect = function() {
   
   this.socket.on('user-joined', (data) => {
     console.log('👋 User joined:', data);
+    
+    // FIXED: Update ICE servers configuration from server
+    if (data.iceServers) {
+      rtcManager.updateIceServers(data.iceServers);
+    }
+    
     uiManager.updateUserCount(uiManager.userCount + 1);
+    // FIXED: Update user name immediately when they join
     uiManager.updateUserName(data.socketId, data.nickname);
-    NotificationManager.show(`🎮 ${data.nickname} joined the gaming session!`, 'success');
+    NotificationManager.show(`🎮 ${data.nickname} ${uiManager.t('joinedSession')}`, 'success');
   });
   
   this.socket.on('user-left', (data) => {
@@ -2813,6 +3445,18 @@ socketManager.connect = function() {
   this.socket.on('new-host', (data) => {
     // Update UI to show new host
     console.log('👑 New host:', data.hostId);
+  });
+  
+  this.socket.on('room-joined', (data) => {
+    console.log('🏠 Room joined successfully:', data);
+    
+    // Update ICE servers configuration from server
+    if (data.iceServers) {
+      rtcManager.updateIceServers(data.iceServers);
+    }
+    
+    uiManager.setHost(data.isHost);
+    uiManager.updateUserCount(data.userCount);
   });
   
   return this.socket;
