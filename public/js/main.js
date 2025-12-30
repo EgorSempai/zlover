@@ -951,14 +951,31 @@ class RTCManager {
     // Handle incoming tracks
     pc.ontrack = (event) => {
       console.log(`🎥 Received remote stream from ${socketId}`);
-      const [remoteStream] = event.streams;
       
-      // Log track details for debugging
-      remoteStream.getTracks().forEach(track => {
-        console.log(`📹 Remote track from ${socketId}: ${track.kind} - enabled: ${track.enabled}, readyState: ${track.readyState}`);
-      });
-      
-      uiManager.addRemoteVideo(socketId, remoteStream);
+      // FIXED: Add null checks for event.streams
+      if (!event.streams || event.streams.length === 0) {
+        console.warn(`⚠️ No streams in ontrack event for ${socketId}, creating new stream`);
+        // Create a new MediaStream and add the track
+        const remoteStream = new MediaStream();
+        if (event.track) {
+          remoteStream.addTrack(event.track);
+        }
+        uiManager.addRemoteVideo(socketId, remoteStream);
+      } else {
+        const [remoteStream] = event.streams;
+        
+        // Log track details for debugging
+        if (remoteStream && remoteStream.getTracks) {
+          remoteStream.getTracks().forEach(track => {
+            console.log(`📹 Remote track from ${socketId}: ${track.kind} - enabled: ${track.enabled}, readyState: ${track.readyState}`);
+          });
+        }
+        
+        uiManager.addRemoteVideo(socketId, remoteStream);
+        
+        // Set up remote audio analysis for active speaker detection
+        this.setupRemoteAudioAnalysis(socketId, remoteStream);
+      }
       
       // FIXED: Update nickname after video element is created
       setTimeout(() => {
@@ -967,9 +984,6 @@ class RTCManager {
           uiManager.updateUserName(socketId, user.nickname);
         }
       }, 100);
-      
-      // Set up remote audio analysis for active speaker detection
-      this.setupRemoteAudioAnalysis(socketId, remoteStream);
     };
 
     // Handle ICE candidates
@@ -1044,7 +1058,14 @@ class RTCManager {
   }
 
   setupRemoteAudioAnalysis(socketId, stream) {
+    console.log(`🎵 Setting up remote audio analysis for ${socketId}`);
     try {
+      // FIXED: Add null checks for stream
+      if (!stream || !stream.getAudioTracks) {
+        console.warn(`⚠️ Invalid stream for audio analysis: ${socketId}`);
+        return;
+      }
+      
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length > 0 && this.audioContext) {
         const source = this.audioContext.createMediaStreamSource(stream);
@@ -1069,19 +1090,26 @@ class RTCManager {
           const average = sum / bufferLength;
           
           // Update remote user's audio visualizer
-          uiManager.updateRemoteAudioVisualizer(socketId, average, dataArray);
+          if (uiManager && uiManager.updateRemoteAudioVisualizer) {
+            uiManager.updateRemoteAudioVisualizer(socketId, average, dataArray);
+          }
           
           // Detect active speaker
           if (average > 30) {
             this.activeSpeaker = socketId;
-            uiManager.setActiveSpeaker(socketId);
+            if (uiManager && uiManager.setActiveSpeaker) {
+              uiManager.setActiveSpeaker(socketId);
+            }
           }
         };
         
         analyze();
+        console.log(`✅ Audio analysis setup complete for ${socketId}`);
+      } else {
+        console.log(`ℹ️ No audio tracks or audio context for ${socketId}`);
       }
     } catch (error) {
-      console.error('Error setting up remote audio analysis:', error);
+      console.error(`❌ Error setting up remote audio analysis for ${socketId}:`, error);
     }
   }
 
@@ -2822,23 +2850,41 @@ class UIManager {
   }
 
   addRemoteVideo(socketId, stream) {
-    const videoGrid = document.getElementById('video-grid');
-    
-    // Remove existing video if any
-    this.removeVideo(socketId);
-    
-    const videoContainer = document.createElement('div');
-    videoContainer.className = 'video-container';
-    videoContainer.id = `video-${socketId}`;
-    videoContainer.dataset.socketId = socketId;
-    
-    const video = document.createElement('video');
-    video.id = `remote-video-${socketId}`;
-    video.srcObject = stream;
-    video.autoplay = true;
-    video.playsinline = true;
-    video.muted = false; // Audio must be ON
-    video.volume = 1.0;
+    try {
+      console.log(`🎥 Adding remote video for ${socketId}`);
+      
+      // FIXED: Add null checks
+      if (!socketId) {
+        console.error('❌ Cannot add remote video: socketId is null/undefined');
+        return;
+      }
+      
+      if (!stream) {
+        console.error(`❌ Cannot add remote video for ${socketId}: stream is null/undefined`);
+        return;
+      }
+      
+      const videoGrid = document.getElementById('video-grid');
+      if (!videoGrid) {
+        console.error('❌ Cannot add remote video: video-grid element not found');
+        return;
+      }
+      
+      // Remove existing video if any
+      this.removeVideo(socketId);
+      
+      const videoContainer = document.createElement('div');
+      videoContainer.className = 'video-container';
+      videoContainer.id = `video-${socketId}`;
+      videoContainer.dataset.socketId = socketId;
+      
+      const video = document.createElement('video');
+      video.id = `remote-video-${socketId}`;
+      video.srcObject = stream;
+      video.autoplay = true;
+      video.playsinline = true;
+      video.muted = false; // Audio must be ON
+      video.volume = 1.0;
 
     // --- AUTOPLAY FIX ---
     const tryPlay = async () => {
@@ -2938,7 +2984,13 @@ class UIManager {
     }
     
     this.updateLayout();
+    
+    console.log(`✅ Successfully added remote video for ${socketId}`);
+  } catch (error) {
+    console.error(`❌ Error adding remote video for ${socketId}:`, error);
+    NotificationManager.show(`Failed to add video for user ${socketId}`, 'error');
   }
+}
 
   removeVideo(socketId) {
     const videoContainer = document.getElementById(`video-${socketId}`);
