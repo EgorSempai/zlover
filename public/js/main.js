@@ -2449,7 +2449,9 @@ class UIManager {
     
     const nameSpan = document.createElement('span');
     nameSpan.className = 'user-name';
-    nameSpan.textContent = `${this.nickname} (You)`;
+    nameSpan.id = 'name-local'; // FIXED: Add ID for consistency
+    // FIXED: Use nickname if available, otherwise show placeholder
+    nameSpan.textContent = this.nickname ? `${this.nickname} (You)` : 'You';
     
     const controlsDiv = document.createElement('div');
     controlsDiv.className = 'video-controls'; 
@@ -2485,6 +2487,8 @@ class UIManager {
     videoGrid.prepend(videoContainer);
     
     this.updateLayout();
+    
+    console.log('✅ Local video added with nickname:', this.nickname);
   }
 
   addRemoteVideo(socketId, stream) {
@@ -3335,10 +3339,18 @@ class UIManager {
     console.log(`📝 Updating name for ${socketId}: ${nickname}`);
     const nameElement = document.getElementById(`name-${socketId}`);
     if (nameElement) {
-      nameElement.textContent = nickname;
+      nameElement.textContent = socketId === 'local' ? `${nickname} (You)` : nickname;
       console.log(`✅ Name updated for ${socketId}: ${nickname}`);
     } else {
       console.warn(`❌ Name element not found for ${socketId}`);
+      // FIXED: Retry mechanism for elements that might not be created yet
+      setTimeout(() => {
+        const retryElement = document.getElementById(`name-${socketId}`);
+        if (retryElement) {
+          retryElement.textContent = socketId === 'local' ? `${nickname} (You)` : nickname;
+          console.log(`✅ Name updated on retry for ${socketId}: ${nickname}`);
+        }
+      }, 500);
     }
   }
 
@@ -3458,10 +3470,12 @@ socketManager.connect = function() {
       NotificationManager.show(`🎮 ${uiManager.t('firstGamer')}`, 'info');
     }
     
-    // Create offers for existing users
-    data.users.forEach(socketId => {
-      console.log('📞 Creating offer for:', socketId);
-      rtcManager.createOffer(socketId);
+    // FIXED: Handle existing users as objects with socketId and nickname
+    data.users.forEach(user => {
+      console.log('📞 Creating offer for:', user.socketId, 'nickname:', user.nickname);
+      rtcManager.createOffer(user.socketId);
+      // FIXED: Set nickname immediately for existing users
+      uiManager.updateUserName(user.socketId, user.nickname);
     });
   });
   
@@ -3530,6 +3544,11 @@ socketManager.connect = function() {
     
     uiManager.setHost(data.isHost);
     uiManager.updateUserCount(data.userCount);
+    
+    // FIXED: Update local user nickname after room is joined
+    if (data.nickname) {
+      uiManager.updateUserName('local', data.nickname);
+    }
   });
   
   return this.socket;
