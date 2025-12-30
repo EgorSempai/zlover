@@ -872,6 +872,27 @@ class RTCManager {
     return stats;
   }
 
+  // Debug method to log transceiver states
+  logTransceiverStates() {
+    console.log('🔍 === TRANSCEIVER DEBUG INFO ===');
+    this.peers.forEach((pc, socketId) => {
+      console.log(`📡 Peer ${socketId}:`);
+      const transceivers = pc.getTransceivers();
+      transceivers.forEach((transceiver, index) => {
+        console.log(`  Transceiver ${index}:`, {
+          kind: transceiver.receiver.track?.kind || 'unknown',
+          direction: transceiver.direction,
+          mid: transceiver.mid,
+          senderTrack: !!transceiver.sender.track,
+          receiverTrack: !!transceiver.receiver.track,
+          senderTrackEnabled: transceiver.sender.track?.enabled,
+          receiverTrackEnabled: transceiver.receiver.track?.enabled
+        });
+      });
+    });
+    console.log('🔍 === END TRANSCEIVER DEBUG ===');
+  }
+
   createPeerConnection(socketId) {
     const config = this.getRTCConfiguration();
     const pc = new RTCPeerConnection(config);
@@ -911,11 +932,32 @@ class RTCManager {
         }
       });
     }
+    
+    // IMPORTANT: Always add a video transceiver, even if we don't have video yet
+    // This ensures we can add video later without renegotiation
+    const hasVideoTrack = this.localStream && this.localStream.getVideoTracks().length > 0;
+    if (!hasVideoTrack) {
+      // Add a video transceiver for future video track
+      // Start with recvonly since we don't have video yet, will change to sendrecv when video is added
+      const videoTransceiver = pc.addTransceiver('video', {
+        direction: 'recvonly'
+      });
+      console.log(`📹 Added video transceiver (recvonly) for future video track to ${socketId}`);
+      console.log(`📹 Transceiver details: direction=${videoTransceiver.direction}, mid=${videoTransceiver.mid}`);
+    } else {
+      console.log(`📹 Video track already exists for ${socketId}, not adding transceiver`);
+    }
 
     // Handle incoming tracks
     pc.ontrack = (event) => {
       console.log(`🎥 Received remote stream from ${socketId}`);
       const [remoteStream] = event.streams;
+      
+      // Log track details for debugging
+      remoteStream.getTracks().forEach(track => {
+        console.log(`📹 Remote track from ${socketId}: ${track.kind} - enabled: ${track.enabled}, readyState: ${track.readyState}`);
+      });
+      
       uiManager.addRemoteVideo(socketId, remoteStream);
       
       // FIXED: Update nickname after video element is created
@@ -975,6 +1017,9 @@ class RTCManager {
         NotificationManager.show('Peer connected successfully', 'success');
         // FIXED: Process any pending candidates now that connection is established
         this.processPendingCandidates(socketId);
+        
+        // Debug: Log transceiver states when connection is established
+        setTimeout(() => this.logTransceiverStates(), 500);
       }
     };
 
@@ -1485,36 +1530,71 @@ class RTCManager {
         // Update all peer connections with the new video track
         this.peers.forEach(async (pc, socketId) => {
           try {
-            // Add the new video track to the peer connection
-            const sender = pc.addTrack(newVideoTrack, this.localStream);
+            // Find the video sender (should exist due to transceiver)
+            const videoSender = pc.getSenders().find(sender => 
+              !sender.track || sender.track.kind === 'video'
+            );
             
-            // Configure video encoding parameters
-            const params = sender.getParameters();
-            if (params.encodings && params.encodings.length > 0) {
-              params.encodings[0].maxBitrate = this.currentSettings.videoBitrate;
-              params.encodings[0].maxFramerate = this.currentSettings.videoFramerate;
-              params.encodings[0].priority = 'medium';
-              params.encodings[0].networkPriority = 'medium';
+            if (videoSender) {
+              // Replace the track (or set it if it was null)
+              await videoSender.replaceTrack(newVideoTrack);
+              
+              // Change transceiver direction to sendrecv now that we have video
+              const videoTransceiver = pc.getTransceivers().find(t => 
+                t.sender === videoSender
+              );
+              if (videoTransceiver && videoTransceiver.direction !== 'sendrecv') {
+                videoTransceiver.direction = 'sendrecv';
+                console.log(`🔄 Changed video transceiver direction to sendrecv for ${socketId}`);
+                
+                // Trigger renegotiation to ensure the direction change takes effect
+                if (pc.signalingState === 'stable') {
+                  try {
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    
+                    socketManager.emit('signal', {
+                      to: socketId,
+                      signal: {
+                        type: 'offer',
+                        offer: offer
+                      }
+                    });
+                    console.log(`🔄 Sent renegotiation offer to ${socketId} for video direction change`);
+                  } catch (renegotiationError) {
+                    console.error(`❌ Renegotiation failed for ${socketId}:`, renegotiationError);
+                  }
+                }
+              }
+              
+              // Configure video encoding parameters
+              const params = videoSender.getParameters();
+              if (params.encodings && params.encodings.length > 0) {
+                params.encodings[0].maxBitrate = this.currentSettings.videoBitrate;
+                params.encodings[0].maxFramerate = this.currentSettings.videoFramerate;
+                params.encodings[0].priority = 'medium';
+                params.encodings[0].networkPriority = 'medium';
+              }
+              await videoSender.setParameters(params);
+              
+              console.log(`✅ Replaced video track for peer connection ${socketId}`);
+            } else {
+              console.warn(`⚠️ No video sender found for ${socketId}, this shouldn't happen`);
             }
-            await sender.setParameters(params);
-            
-            console.log(`✅ Added video track to peer connection ${socketId}`);
-            
-            // IMPORTANT: Renegotiate the connection so other users can see the video
-            // Add small delay to ensure track is properly added
-            setTimeout(async () => {
-              await this.renegotiateConnection(socketId, pc);
-            }, 100);
             
           } catch (error) {
-            console.error(`❌ Error adding video track to ${socketId}:`, error);
+            console.error(`❌ Error updating video track for ${socketId}:`, error);
           }
         });
         
         this.isVideoMuted = false;
         uiManager.updateVideoButton(this.isVideoMuted);
         uiManager.updateLocalVideoDisplay(false);
-        NotificationManager.show(`📹 Camera enabled - updating connections...`, 'success');
+        NotificationManager.show(`📹 Camera enabled!`, 'success');
+        
+        // Debug: Log transceiver states after enabling camera
+        setTimeout(() => this.logTransceiverStates(), 1000);
+        
         return true;
         
       } catch (error) {
@@ -1524,125 +1604,68 @@ class RTCManager {
       }
     } else {
       // Video track exists, toggle it
+      const wasEnabled = videoTrack.enabled;
       videoTrack.enabled = !videoTrack.enabled;
       this.isVideoMuted = !videoTrack.enabled;
       uiManager.updateVideoButton(this.isVideoMuted);
       uiManager.updateLocalVideoDisplay(this.isVideoMuted);
       
-      // IMPORTANT: Renegotiate connections when video state changes
-      if (this.peers.size > 0) {
-        console.log('🔄 Renegotiating connections due to video toggle');
+      // If we're disabling video, replace track with null in peer connections
+      if (!videoTrack.enabled && wasEnabled) {
         this.peers.forEach(async (pc, socketId) => {
           try {
-            await this.renegotiateConnection(socketId, pc);
+            const videoSender = pc.getSenders().find(sender => 
+              sender.track && sender.track.kind === 'video'
+            );
+            
+            if (videoSender) {
+              await videoSender.replaceTrack(null);
+              
+              // Change transceiver direction to recvonly when disabling video
+              const videoTransceiver = pc.getTransceivers().find(t => 
+                t.sender === videoSender
+              );
+              if (videoTransceiver && videoTransceiver.direction !== 'recvonly') {
+                videoTransceiver.direction = 'recvonly';
+                console.log(`🔄 Changed video transceiver direction to recvonly for ${socketId}`);
+              }
+              
+              console.log(`✅ Disabled video track for peer connection ${socketId}`);
+            }
           } catch (error) {
-            console.error(`❌ Error renegotiating after video toggle with ${socketId}:`, error);
+            console.error(`❌ Error disabling video track for ${socketId}:`, error);
+          }
+        });
+      }
+      // If we're enabling video, replace null with the track
+      else if (videoTrack.enabled && !wasEnabled) {
+        this.peers.forEach(async (pc, socketId) => {
+          try {
+            const videoSender = pc.getSenders().find(sender => 
+              !sender.track || sender.track.kind === 'video'
+            );
+            
+            if (videoSender) {
+              await videoSender.replaceTrack(videoTrack);
+              
+              // Change transceiver direction to sendrecv when enabling video
+              const videoTransceiver = pc.getTransceivers().find(t => 
+                t.sender === videoSender
+              );
+              if (videoTransceiver && videoTransceiver.direction !== 'sendrecv') {
+                videoTransceiver.direction = 'sendrecv';
+                console.log(`🔄 Changed video transceiver direction to sendrecv for ${socketId}`);
+              }
+              
+              console.log(`✅ Enabled video track for peer connection ${socketId}`);
+            }
+          } catch (error) {
+            console.error(`❌ Error enabling video track for ${socketId}:`, error);
           }
         });
       }
       
       return !this.isVideoMuted;
-    }
-  }
-
-  // Renegotiate WebRTC connection when tracks are added/removed
-  async renegotiateConnection(socketId, pc) {
-    try {
-      console.log(`🔄 Renegotiating connection with ${socketId} for new video track`);
-      
-      // Create a new offer with the updated tracks
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true
-      });
-      
-      // Apply codec enhancements
-      offer.sdp = this.enhanceAudioSDP(offer.sdp);
-      offer.sdp = this.enhanceVideoSDP(offer.sdp);
-      
-      await pc.setLocalDescription(offer);
-      
-      // Send the renegotiation offer
-      socketManager.emit('signal', {
-        to: socketId,
-        signal: {
-          type: 'renegotiate-offer',
-          offer: offer
-        }
-      });
-      
-      console.log(`📤 Sent renegotiation offer to ${socketId}`);
-      
-      // Show user feedback
-      NotificationManager.show(`🔄 Updating video connection with other users...`, 'info', 2000);
-      
-    } catch (error) {
-      console.error(`❌ Error renegotiating connection with ${socketId}:`, error);
-    }
-  }
-
-  // Handle renegotiation offers from remote peers
-  async handleRenegotiateOffer(socketId, offer) {
-    console.log(`📥 Handling renegotiation offer from ${socketId}`);
-    const pc = this.peers.get(socketId);
-    
-    if (!pc) {
-      console.error(`❌ No peer connection found for ${socketId}`);
-      return;
-    }
-    
-    try {
-      // Apply codec enhancements to incoming offer
-      offer.sdp = this.enhanceAudioSDP(offer.sdp);
-      offer.sdp = this.enhanceVideoSDP(offer.sdp);
-      
-      await pc.setRemoteDescription(offer);
-      
-      const answer = await pc.createAnswer();
-      
-      // Apply codec enhancements to answer
-      answer.sdp = this.enhanceAudioSDP(answer.sdp);
-      answer.sdp = this.enhanceVideoSDP(answer.sdp);
-      
-      await pc.setLocalDescription(answer);
-      
-      // Send the renegotiation answer
-      socketManager.emit('signal', {
-        to: socketId,
-        signal: {
-          type: 'renegotiate-answer',
-          answer: answer
-        }
-      });
-      
-      console.log(`📤 Sent renegotiation answer to ${socketId}`);
-      
-    } catch (error) {
-      console.error(`❌ Error handling renegotiation offer from ${socketId}:`, error);
-    }
-  }
-
-  // Handle renegotiation answers from remote peers
-  async handleRenegotiateAnswer(socketId, answer) {
-    console.log(`📥 Handling renegotiation answer from ${socketId}`);
-    const pc = this.peers.get(socketId);
-    
-    if (!pc) {
-      console.error(`❌ No peer connection found for ${socketId}`);
-      return;
-    }
-    
-    try {
-      // Apply codec enhancements to incoming answer
-      answer.sdp = this.enhanceAudioSDP(answer.sdp);
-      answer.sdp = this.enhanceVideoSDP(answer.sdp);
-      
-      await pc.setRemoteDescription(answer);
-      
-      console.log(`✅ Renegotiation completed with ${socketId}`);
-      
-    } catch (error) {
-      console.error(`❌ Error handling renegotiation answer from ${socketId}:`, error);
     }
   }
 
